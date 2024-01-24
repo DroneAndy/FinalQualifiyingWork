@@ -20,6 +20,8 @@ points_number = 17
 skeleton_number = 6  # here количество скелетов
 confidence = 0.4  # 0.4 это коэффициент уверенности в точке
 
+convert_to_universal_skeleton = True
+
 
 # Функция для пересчета координат точек
 def convert_points(im, points):
@@ -31,6 +33,38 @@ def convert_points(im, points):
         points[j][0] = np.round(joints[0] * im.shape[0] * ratio - coef).astype(np.int64)
     return points
 
+
+# Получение точки посередине
+def get_middle_point(a, b):
+    x = (a[0] + b[0]) / 2
+    y = (a[1] + b[1]) / 2
+    conf = (a[2] + b[2]) / 2
+    middle = np.array([x, y, conf])
+    return middle
+
+
+# Преобразование скелетной модели posenet (movenet) к универсальной модели
+def convert_posenet(points):
+    new_points = np.ndarray([17, 3])
+
+    new_points[0] = points[0]
+    new_points[1] = get_middle_point(points[5], points[6])
+    new_points[2] = points[6]
+    new_points[3] = points[8]
+    new_points[4] = points[10]
+    new_points[5] = points[12]
+    new_points[6] = points[14]
+    new_points[7] = points[16]
+    new_points[8] = points[5]
+    new_points[9] = points[7]
+    new_points[10] = points[9]
+    new_points[11] = points[11]
+    new_points[12] = points[13]
+    new_points[13] = points[15]
+    new_points[15] = get_middle_point(points[11], points[12])
+    new_points[14] = get_middle_point(new_points[1], new_points[15])
+    new_points[16] = get_middle_point(new_points[0], new_points[1])
+    return new_points
 
 
 def draw_posenet_skeletal_data(im, sks, num):
@@ -46,6 +80,8 @@ def draw_posenet_skeletal_data(im, sks, num):
             f.write(f"Frame: {num}\n")
 
         points = convert_points(im, points)
+        if convert_to_universal_skeleton:
+            points = convert_posenet(points)
 
         for j in range(points_number):
             with open('test.txt', 'a') as f:
@@ -59,8 +95,8 @@ def draw_posenet_skeletal_data(im, sks, num):
     return im
 
 
-cap = cv2.VideoCapture(0)  # 1 - номер устройства
-# cap = cv2.VideoCapture("C:\\Users\\akova\\Documents\\posenet-python-master\\posenet-python-master\\person_stream.mp4")  # 1 - номер устройства
+# cap = cv2.VideoCapture(0)  # 1 - номер устройства
+cap = cv2.VideoCapture("C:\\Users\\akova\\Documents\\posenet-python-master\\posenet-python-master\\person_stream.mp4")  # 1 - номер устройства
 open('test.txt', 'w').close()
 i = 0
 while cap.isOpened():
