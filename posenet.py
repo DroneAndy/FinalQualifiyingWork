@@ -21,6 +21,18 @@ skeleton_number = 6  # here количество скелетов
 confidence = 0.4  # 0.4 это коэффициент уверенности в точке
 
 
+# Функция для пересчета координат точек
+def convert_points(im, points):
+    ratio = im.shape[1] / im.shape[0]
+    coef = im.shape[0] / 255 * 100
+    for j in range(points_number):
+        joints = points[j, :2]
+        points[j][1] = np.round(joints[1] * im.shape[1]).astype(np.int64)
+        points[j][0] = np.round(joints[0] * im.shape[0] * ratio - coef).astype(np.int64)
+    return points
+
+
+
 def draw_posenet_skeletal_data(im, sks, num):
     ratio = im.shape[1] / im.shape[0]
     coef = im.shape[0] / 255 * 100
@@ -33,16 +45,16 @@ def draw_posenet_skeletal_data(im, sks, num):
         with open('test.txt', 'a') as f:
             f.write(f"Frame: {num}\n")
 
+        points = convert_points(im, points)
+
         for j in range(points_number):
             with open('test.txt', 'a') as f:
                 f.write(f"{points[j][0]} {points[j][1]} {points[j][2]}\n")
 
             if points[j][2] > confidence:
-                joints = points[j, :2]
                 im = cv2.circle(im,
-                                (np.round(joints[1] * im.shape[1]).astype(np.int64),
-                                 # np.round(joints[0] * im.shape[0]).astype(np.int64)),
-                                 np.round(joints[0] * im.shape[0] * ratio - coef).astype(np.int64)),
+                                (points[j][1].astype(np.int64),
+                                 points[j][0].astype(np.int64)),
                                 radius=5, color=(255, 255, 255), thickness=-1)
     return im
 
