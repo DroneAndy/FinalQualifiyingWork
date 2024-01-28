@@ -34,6 +34,25 @@ def convert_points(im, points):
     return points
 
 
+kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6], [7, 16], [7, 8],
+                      [8, 9], [0, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15]]
+
+
+def draw_kinect(im, points, skeleton_color):
+    for j in range(points_number):
+        if points[j][2] > confidence:
+            im = cv2.circle(im,
+                            (points[j][1].astype(np.int64),
+                             points[j][0].astype(np.int64)),
+                            radius=5, color=skeleton_color, thickness=-1)
+    for connect in kinect_connections:
+        if points[connect[0]][2] > confidence and points[connect[1]][2] > confidence:
+            cv2.line(im,
+                     (points[connect[0]][1].astype(np.int64), points[connect[0]][0].astype(np.int64)),
+                     (points[connect[1]][1].astype(np.int64), points[connect[1]][0].astype(np.int64)),
+                     color=skeleton_color, thickness=skeleton_thickness)
+
+
 # Получение точки посередине
 def get_middle_point(a, b):
     x = (a[0] + b[0]) / 2
