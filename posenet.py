@@ -86,6 +86,18 @@ def convert_posenet(points):
     return new_points
 
 
+def draw_kinect_origin(im):
+    kinect_origin_file.readline()
+    points = np.ndarray([17, 3])
+    for j in range(17):
+        tmp = kinect_origin_file.readline().split(' ')
+        points[j][0] = round(float(tmp[5]))
+        points[j][1] = round(float(tmp[4]))
+        points[j][2] = round(float(tmp[3])) * confidence
+
+    draw_kinect(im, points, (0, 255, 0))
+
+
 def draw_posenet_skeletal_data(im, sks, num):
     ratio = im.shape[1] / im.shape[0]
     coef = im.shape[0] / 255 * 100
@@ -102,15 +114,7 @@ def draw_posenet_skeletal_data(im, sks, num):
         if convert_to_universal_skeleton:
             points = convert_posenet(points)
 
-        for j in range(points_number):
-            with open('test.txt', 'a') as f:
-                f.write(f"{points[j][0]} {points[j][1]} {points[j][2]}\n")
-
-            if points[j][2] > confidence:
-                im = cv2.circle(im,
-                                (points[j][1].astype(np.int64),
-                                 points[j][0].astype(np.int64)),
-                                radius=5, color=(255, 255, 255), thickness=-1)
+    draw_kinect_origin(im)
     return im
 
 
@@ -118,6 +122,10 @@ def draw_posenet_skeletal_data(im, sks, num):
 cap = cv2.VideoCapture("C:\\Users\\akova\\Documents\\posenet-python-master\\posenet-python-master\\person_stream.mp4")  # 1 - номер устройства
 open('test.txt', 'w').close()
 i = 0
+kinect_origin_file = open(
+    'C:\\Users\\akova\\Documents\\Учеба\\Диплом\\Scene_2023-11-16_12-12-39\\Scene_2023-11-16_12-12-39\\Body'
+    '\\FileSkeleton.txt', 'r')
+
 while cap.isOpened():
     ret, frame = cap.read()
     if ret:
