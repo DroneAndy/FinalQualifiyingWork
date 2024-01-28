@@ -66,23 +66,23 @@ def get_middle_point(a, b):
 def convert_posenet(points):
     new_points = np.ndarray([17, 3])
 
-    new_points[0] = points[0]
-    new_points[1] = get_middle_point(points[5], points[6])
-    new_points[2] = points[6]
-    new_points[3] = points[8]
-    new_points[4] = points[10]
-    new_points[5] = points[12]
-    new_points[6] = points[14]
-    new_points[7] = points[16]
-    new_points[8] = points[5]
-    new_points[9] = points[7]
-    new_points[10] = points[9]
-    new_points[11] = points[11]
-    new_points[12] = points[13]
-    new_points[13] = points[15]
-    new_points[15] = get_middle_point(points[11], points[12])
-    new_points[14] = get_middle_point(new_points[1], new_points[15])
-    new_points[16] = get_middle_point(new_points[0], new_points[1])
+    new_points[3] = points[0]
+    new_points[16] = get_middle_point(points[5], points[6])
+    new_points[4] = points[6]
+    new_points[5] = points[8]
+    new_points[6] = points[10]
+    new_points[10] = points[12]
+    new_points[11] = points[14]
+    new_points[12] = points[16]
+    new_points[7] = points[5]
+    new_points[8] = points[7]
+    new_points[9] = points[9]
+    new_points[13] = points[11]
+    new_points[14] = points[13]
+    new_points[15] = points[15]
+    new_points[0] = get_middle_point(points[11], points[12])
+    new_points[1] = get_middle_point(new_points[16], new_points[0])
+    new_points[2] = get_middle_point(new_points[3], new_points[16])
     return new_points
 
 
