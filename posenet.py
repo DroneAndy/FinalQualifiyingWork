@@ -3,7 +3,8 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
 
-model = hub.load("https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
+model = hub.load(
+    "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
 movenet = model.signatures['serving_default']
 
 
@@ -13,7 +14,7 @@ def get_posenet_skeletal_data(im):
     return movenet(image)
 
 
-coef = 420  # Я не понял пока как этот коэффициент высчитывать, 280
+# coef = 420 # 280 Я не понял пока как этот коэффициент высчитывать,
 # но он зависит от разрешения. Нужен, чтобы смещать по высоте точки
 
 points_number = 17
@@ -21,6 +22,7 @@ skeleton_number = 6  # here количество скелетов
 confidence = 0.4  # 0.4 это коэффициент уверенности в точке
 
 convert_to_universal_skeleton = True
+skeleton_thickness = 2
 
 
 # Функция для пересчета координат точек
@@ -99,27 +101,24 @@ def draw_kinect_origin(im):
 
 
 def draw_posenet_skeletal_data(im, sks, num):
-    ratio = im.shape[1] / im.shape[0]
-    coef = im.shape[0] / 255 * 100
-    print(coef)
-    for i in range(skeleton_number):
-        points = sks['output_0'][0][i].numpy()
+    for j in range(skeleton_number):
+        points = sks['output_0'][0][j].numpy()
         points = points[:51].reshape([points_number, 3])  # размерность массива на выходе 56,
         # первые 51 это координаты точек
-        # print(points)
         with open('test.txt', 'a') as f:
             f.write(f"Frame: {num}\n")
 
         points = convert_points(im, points)
         if convert_to_universal_skeleton:
             points = convert_posenet(points)
+            draw_kinect(im, points, (0, 0, 255))
 
     draw_kinect_origin(im)
     return im
 
 
 # cap = cv2.VideoCapture(0)  # 1 - номер устройства
-cap = cv2.VideoCapture("C:\\Users\\akova\\Documents\\posenet-python-master\\posenet-python-master\\person_stream.mp4")  # 1 - номер устройства
+cap = cv2.VideoCapture("C:\\Users\\akova\\Documents\\posenet-python-master\\posenet-python-master\\person_stream.mp4")
 open('test.txt', 'w').close()
 i = 0
 kinect_origin_file = open(
