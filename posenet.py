@@ -19,7 +19,7 @@ def get_posenet_skeletal_data(im):
 
 points_number = 17
 skeleton_number = 6  # here количество скелетов
-confidence = 0.4  # 0.4 это коэффициент уверенности в точке
+confidence = 0.3  # 0.4 это коэффициент уверенности в точке
 
 convert_to_universal_skeleton = True
 skeleton_thickness = 2
@@ -39,15 +39,20 @@ def convert_points(im, points):
 kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6], [7, 16], [7, 8],
                       [8, 9], [0, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15]]
 
+posenet_connections = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
+                       [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
 
-def draw_kinect(im, points, skeleton_color):
+
+def draw_skeleton(im, points, connections, skeleton_color):
     for j in range(points_number):
+        with open('test.txt', 'a') as f:
+            f.write(f"{points[j][0]} {points[j][1]} {points[j][2]}\n")
         if points[j][2] > confidence:
             im = cv2.circle(im,
                             (points[j][1].astype(np.int64),
                              points[j][0].astype(np.int64)),
                             radius=5, color=skeleton_color, thickness=-1)
-    for connect in kinect_connections:
+    for connect in connections:
         if points[connect[0]][2] > confidence and points[connect[1]][2] > confidence:
             cv2.line(im,
                      (points[connect[0]][1].astype(np.int64), points[connect[0]][0].astype(np.int64)),
@@ -97,7 +102,7 @@ def draw_kinect_origin(im):
         points[j][1] = round(float(tmp[4]))
         points[j][2] = round(float(tmp[3])) * confidence
 
-    draw_kinect(im, points, (0, 255, 0))
+    draw_skeleton(im, points, kinect_connections, (0, 255, 0))
 
 
 def draw_posenet_skeletal_data(im, sks, num):
@@ -111,7 +116,11 @@ def draw_posenet_skeletal_data(im, sks, num):
         points = convert_points(im, points)
         if convert_to_universal_skeleton:
             points = convert_posenet(points)
-            draw_kinect(im, points, (0, 0, 255))
+            draw_skeleton(im, points, kinect_connections, (0, 0, 255))
+        else:
+            draw_skeleton(im, points, posenet_connections, (0, 255, 0))
+            points = convert_posenet(points)
+            draw_skeleton(im, points, kinect_connections, (0, 0, 255))
 
     draw_kinect_origin(im)
     return im
