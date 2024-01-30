@@ -100,7 +100,7 @@ def draw_kinect_origin(im):
         tmp = kinect_origin_file.readline().split(' ')
         points[j][0] = round(float(tmp[5]))
         points[j][1] = round(float(tmp[4]))
-        points[j][2] = round(float(tmp[3])) * confidence
+        points[j][2] = round(float(tmp[3])) * confidence * 1.1
 
     draw_skeleton(im, points, kinect_connections, (0, 255, 0))
 
