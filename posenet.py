@@ -127,14 +127,12 @@ def draw_posenet_skeletal_data(im, sks, num):
 
 
 # cap = cv2.VideoCapture(0)  # 1 - номер устройства
-cap = cv2.VideoCapture("C:\\Users\\akova\\Documents\\posenet-python-master\\posenet-python-master\\person_stream.mp4")
+cap = cv2.VideoCapture('person_stream.mp4')
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 24.0, (1920, 1080))
 open('test.txt', 'w').close()
 i = 0
-kinect_origin_file = open(
-    'C:\\Users\\akova\\Documents\\Учеба\\Диплом\\Scene_2023-11-16_12-12-39\\Scene_2023-11-16_12-12-39\\Body'
-    '\\FileSkeleton.txt', 'r')
+kinect_origin_file = open('FileSkeleton.txt', 'r')
 
 while cap.isOpened():
     ret, frame = cap.read()
