@@ -24,6 +24,8 @@ confidence = 0.3  # 0.4 это коэффициент уверенности в 
 convert_to_universal_skeleton = True
 skeleton_thickness = 2
 
+hip_coef = 1.01
+
 
 # Функция для пересчета координат точек
 def convert_points(im, points):
@@ -79,12 +81,14 @@ def convert_posenet(points):
     new_points[5] = points[8]
     new_points[6] = points[10]
     new_points[10] = points[12]
+    new_points[10][1] = points[12][1] * hip_coef
     new_points[11] = points[14]
     new_points[12] = points[16]
     new_points[7] = points[5]
     new_points[8] = points[7]
     new_points[9] = points[9]
     new_points[13] = points[11]
+    new_points[13][1] = points[11][1] / hip_coef
     new_points[14] = points[13]
     new_points[15] = points[15]
     new_points[0] = get_middle_point(points[11], points[12])
