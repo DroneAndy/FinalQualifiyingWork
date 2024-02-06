@@ -22,6 +22,7 @@ skeleton_number = 6  # here количество скелетов
 confidence = 0.3  # 0.4 это коэффициент уверенности в точке
 
 convert_to_universal_skeleton = True
+draw_kinect_origin_skeleton = True
 skeleton_thickness = 2
 
 hip_coef = 1.01
@@ -97,7 +98,7 @@ def convert_posenet(points):
     return new_points
 
 
-def draw_kinect_origin(im):
+def get_kinect_origin_points():
     kinect_origin_file.readline()
     points = np.ndarray([17, 3])
     for j in range(17):
@@ -105,8 +106,7 @@ def draw_kinect_origin(im):
         points[j][0] = round(float(tmp[5]))
         points[j][1] = round(float(tmp[4]))
         points[j][2] = round(float(tmp[3])) * confidence * 1.1
-
-    draw_skeleton(im, points, kinect_connections, (0, 255, 0))
+    return points
 
 
 def draw_posenet_skeletal_data(im, sks, num):
@@ -126,11 +126,13 @@ def draw_posenet_skeletal_data(im, sks, num):
             points = convert_posenet(points)
             draw_skeleton(im, points, kinect_connections, (0, 0, 255))
 
-    draw_kinect_origin(im)
+        if draw_kinect_origin_skeleton:
+            kinect_points = get_kinect_origin_points()
+            draw_skeleton(im, kinect_points, kinect_connections, (0, 255, 0))
+
     return im
 
 
-# cap = cv2.VideoCapture(0)  # 1 - номер устройства
 cap = cv2.VideoCapture('person_stream.mp4')
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 24.0, (1920, 1080))
