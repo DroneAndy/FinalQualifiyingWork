@@ -2,6 +2,7 @@ import cv2
 import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
+import sqlite3
 
 model = hub.load(
     "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
@@ -109,7 +110,20 @@ def get_kinect_origin_points():
     return points
 
 
+def write_points_to_db(connect, file_id, points, kinect_points):
+    cursor = connect.cursor()
+    for j in range(17):
+        cursor.execute(f'insert into point_difference (file_id, point_type, x1, y1, confidence1, x2, y2, confidence2)'
+                       f'select {file_id}, {j}'
+                       f', {points[j][0]}, {points[j][1]}, {points[j][2]}'
+                       f', {kinect_points[j][0]}, {kinect_points[j][1]}, {kinect_points[j][2]}')
+    connect.commit()
+
+
 def draw_posenet_skeletal_data(im, sks, num):
+    if draw_kinect_origin_skeleton:
+        kinect_points = get_kinect_origin_points()
+    
     for j in range(skeleton_number):
         points = sks['output_0'][0][j].numpy()
         points = points[:51].reshape([points_number, 3])  # размерность массива на выходе 56,
@@ -127,18 +141,25 @@ def draw_posenet_skeletal_data(im, sks, num):
             draw_skeleton(im, points, kinect_connections, (0, 0, 255))
 
         if draw_kinect_origin_skeleton:
-            kinect_points = get_kinect_origin_points()
             draw_skeleton(im, kinect_points, kinect_connections, (0, 255, 0))
+            write_points_to_db(db_connection, file_id1, points, kinect_points)
 
     return im
 
 
-cap = cv2.VideoCapture('person_stream.mp4')
+filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
+database = 'test_db'
+cap = cv2.VideoCapture(filename)
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 24.0, (1920, 1080))
 open('test.txt', 'w').close()
 i = 0
 kinect_origin_file = open('FileSkeleton.txt', 'r')
+db_connection = sqlite3.connect(database)
+curs = db_connection.cursor()
+curs.execute(f'insert into files (file_name) values (\'{filename}\');')
+file_id1 = curs.lastrowid
+db_connection.commit()
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -155,6 +176,7 @@ while cap.isOpened():
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
+db_connection.close()
 cap.release()
 out.release()
 cv2.destroyAllWindows()
