@@ -115,8 +115,8 @@ def write_points_to_db(connect, file_id, points, kinect_points):
     for j in range(17):
         cursor.execute(f'insert into point_difference (file_id, point_type, x1, y1, confidence1, x2, y2, confidence2)'
                        f'select {file_id}, {j}'
-                       f', {points[j][0]}, {points[j][1]}, {points[j][2]}'
-                       f', {kinect_points[j][0]}, {kinect_points[j][1]}, {kinect_points[j][2]}')
+                       f', {points[j][1]}, {points[j][0]}, {points[j][2]}'
+                       f', {kinect_points[j][1]}, {kinect_points[j][0]}, {kinect_points[j][2]}')
     connect.commit()
 
 
