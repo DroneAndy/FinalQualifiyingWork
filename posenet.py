@@ -1,10 +1,24 @@
+import os
 import cv2
+import scipy
 import tensorflow as tf
 import tensorflow_hub as hub
 import numpy as np
 import sqlite3
 from pathlib import Path
 import datetime
+import enum
+
+
+class WorkTypes(enum.Enum):
+    single_video = 0,
+    images = 1,
+    SYSU3DAction = 2
+
+
+class Libraries(enum.Enum):
+    move_net = 0
+
 
 model = hub.load(
     "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
@@ -15,15 +29,20 @@ UNIVERSAL_POINTS_NUMBER = 17
 SKELETON_NUMBER = 6
 CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке
 
+LIBRARY = Libraries.move_net
+
 CONVERT_TO_UNIVERSAL_SKELETON = True
 DRAW_KINECT_ORIGIN_SKELETON = True
-WRITE_POINTS_TO_DB = False
-DATABASE_FILE = 'test_db'
+WRITE_POINTS_TO_DB = True
+DATABASE_FILE = 'test_db2'
 
 WRITE_POINTS_TO_FILE = False
 POINTS_FILENAME = 'test.txt'
 
-SKELETON_THICKNESS = 2
+SHOW_FRAME = False
+
+SKELETON_THICKNESS = 1
+SKELETON_POINTS_RADIOS = 3
 
 HIP_COEFFICIENT = 1.01
 
@@ -33,8 +52,11 @@ kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6],
 posenet_connections = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
                        [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
 
+WORK_TYPE = WorkTypes.SYSU3DAction
 
-def get_posenet_skeletal_data(image):
+
+def get_movenet_skeletal_data(image):
+
     image_width, image_height = image.shape[1], image.shape[0]
 
     input_image = cv2.resize(image, dsize=(256, 256))
@@ -69,7 +91,7 @@ def draw_skeleton(im, points, connections, skeleton_color):
             im = cv2.circle(im,
                             (points[j][0].astype(np.int64),
                              points[j][1].astype(np.int64)),
-                            radius=5, color=skeleton_color, thickness=-1)
+                            radius=SKELETON_POINTS_RADIOS, color=skeleton_color, thickness=-1)
     for connect in connections:
         if points[connect[0]][2] > CONFIDENCE and points[connect[1]][2] > CONFIDENCE:
             cv2.line(im,
@@ -87,8 +109,8 @@ def get_middle_point(a, b):
     return middle
 
 
-# Преобразование скелетной модели posenet (movenet) к универсальной модели
 def convert_posenet(points):
+    """ Преобразование скелетной модели posenet (movenet) к универсальной модели """
     new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
     new_points[3] = points[0]
     new_points[16] = get_middle_point(points[5], points[6])
@@ -112,7 +134,29 @@ def convert_posenet(points):
     return new_points
 
 
-def get_kinect_origin_points():
+def convert_kinect_v1(points):
+    new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+    new_points[0] = points[0]
+    new_points[1] = points[1]
+    new_points[2] = get_middle_point(points[2], points[3])
+    new_points[3] = points[3]
+    new_points[4] = points[4]
+    new_points[5] = points[5]
+    new_points[6] = points[6]
+    new_points[7] = points[8]
+    new_points[8] = points[9]
+    new_points[9] = points[10]
+    new_points[10] = points[12]
+    new_points[11] = points[13]
+    new_points[12] = points[14]
+    new_points[13] = points[16]
+    new_points[14] = points[17]
+    new_points[15] = points[18]
+    new_points[16] = points[2]
+    return new_points
+
+
+def get_kinect_origin_points(kinect_origin_file):
     kinect_origin_file.readline()
     points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
     for j in range(UNIVERSAL_POINTS_NUMBER):
@@ -123,13 +167,15 @@ def get_kinect_origin_points():
     return points
 
 
-def write_points_to_db(connect, points, kinect_points):
+def write_points_to_db(connect, file_id, points, kinect_points, frame_number):
     cursor = connect.cursor()
     for j in range(UNIVERSAL_POINTS_NUMBER):
-        cursor.execute(f'insert into point_difference (file_id, point_type, x1, y1, confidence1, x2, y2, confidence2)'
-                       f'select {file_id}, {j}'
-                       f', {points[j][0]}, {points[j][1]}, {points[j][2]}'
-                       f', {kinect_points[j][0]}, {kinect_points[j][1]}, {kinect_points[j][2]}')
+        cursor.execute(f'insert into point_difference (file_id, point_type, frame_number'
+                       f', x_kinect, y_kinect, confidence_kinect'
+                       f', x_converted, y_converted, confidence_converted)'
+                       f'select {file_id}, {j}, {frame_number}'
+                       f', {kinect_points[j][0]}, {kinect_points[j][1]}, {kinect_points[j][2]}'
+                       f', {points[j][0]}, {points[j][1]}, {points[j][2]}')
     connect.commit()
 
 
@@ -140,67 +186,149 @@ def get_average_skeleton_confidence(points):
     return conf / len(points)
 
 
-if __name__ == "__main__":
-    filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
+def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id):
+    skeletons = np.ndarray([0])
+    match LIBRARY:
+        case Libraries.move_net:
+            skeletons = get_movenet_skeletal_data(frame)
+    frame = frame.astype(np.uint8)
+
+    for j in range(SKELETON_NUMBER):
+        current_points = skeletons[j]
+        if WRITE_POINTS_TO_FILE:
+            with open(POINTS_FILENAME, 'a') as f:
+                f.write(f"Frame: {frame_number}\n")
+
+        if get_average_skeleton_confidence(current_points) > CONFIDENCE:
+            if CONVERT_TO_UNIVERSAL_SKELETON:
+                current_points = convert_posenet(current_points)
+                draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
+            else:
+                draw_skeleton(frame, current_points, posenet_connections, (0, 255, 0))
+                current_points = convert_posenet(current_points)
+                draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
+
+        if DRAW_KINECT_ORIGIN_SKELETON:
+            draw_skeleton(frame, origin_points, kinect_connections, (0, 255, 0))
+
+            if WRITE_POINTS_TO_DB:
+                write_points_to_db(db_connection, file_id, current_points, origin_points, frame_number)
+
+    if SHOW_FRAME:
+        cv2.imshow('frame', frame)
+    out.write(frame)
+
+
+def analyse_images(db_connection, images_path, origin_points, out_filename):
+    image_width = round(cv2.imread(os.path.join(images_path, os.listdir(images_path)[0])).shape[1])
+    image_height = round(cv2.imread(os.path.join(images_path, os.listdir(images_path)[0])).shape[0])
+
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(f'{out_filename}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
+                          , fourcc, 24
+                          , (image_width, image_height))
+    file_id = -1
+    if WRITE_POINTS_TO_DB:
+        curs = db_connection.cursor()
+        curs.execute(f'insert into files (file_name, library_id, confidence, experiment_date, width, height)'
+                     f'select \'{out_filename}\', {LIBRARY.value}'
+                     f', {CONFIDENCE}, datetime(\'now\',\'localtime\')'
+                     f', {image_width}, {image_height};')
+        file_id = curs.lastrowid
+        db_connection.commit()
+
+    i = 0
+    for img in os.listdir(images_path):
+        if os.path.isfile(os.path.join(images_path, img)):
+            frame = cv2.imread(os.path.join(images_path, img))
+            if frame is None:
+                print(f'can not read {os.path.join(images_path, img)}')
+                continue
+            analyse_frame(frame, i, out, origin_points[i], db_connection, file_id)
+            i += 1
+    out.release()
+
+
+def analyse_video(db_connection, filename):
+    file_id = -1
+    if WRITE_POINTS_TO_DB:
+        curs = db_connection.cursor()
+        curs.execute(f'insert into files (file_name, library_id, confidence, experiment_date)'
+                     f'select \'{filename}\', {LIBRARY}, {CONFIDENCE}, now();')
+        file_id = curs.lastrowid
+        db_connection.commit()
     cap = cv2.VideoCapture(filename)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(f'{Path(filename).stem}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
                           , fourcc, cap.get(cv2.CAP_PROP_FPS)
                           , (round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
-
-    if WRITE_POINTS_TO_FILE:
-        open(POINTS_FILENAME, 'w').close()
     i = 0
-    kinect_origin_file = open('FileSkeleton.txt', 'r')
-
-    db_connection = None
-    if WRITE_POINTS_TO_DB:
-        db_connection = sqlite3.connect(DATABASE_FILE)
-        curs = db_connection.cursor()
-        curs.execute(f'insert into files (file_name) values (\'{filename}\');')
-        file_id = curs.lastrowid
-        db_connection.commit()
-
     while cap.isOpened():
         ret, frame = cap.read()
         if ret:
-            skeletons = get_posenet_skeletal_data(frame)
-            frame = frame.astype(np.uint8)
+            current_kinect_points = np.ndarray([0, 0])
             if DRAW_KINECT_ORIGIN_SKELETON:
                 current_kinect_points = get_kinect_origin_points()
-
-            for j in range(SKELETON_NUMBER):
-                current_points = skeletons[j]
-                if WRITE_POINTS_TO_FILE:
-                    with open(POINTS_FILENAME, 'a') as f:
-                        f.write(f"Frame: {i}\n")
-
-                if get_average_skeleton_confidence(current_points) > CONFIDENCE:
-                    if CONVERT_TO_UNIVERSAL_SKELETON:
-                        current_points = convert_posenet(current_points)
-                        draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
-                    else:
-                        draw_skeleton(frame, current_points, posenet_connections, (0, 255, 0))
-                        current_points = convert_posenet(current_points)
-                        draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
-
-                if DRAW_KINECT_ORIGIN_SKELETON:
-                    draw_skeleton(frame, current_kinect_points, kinect_connections, (0, 255, 0))
-
-                    if WRITE_POINTS_TO_DB:
-                        write_points_to_db(db_connection, current_points, current_kinect_points)
-
-            cv2.imshow('frame', frame)
+            analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id)
             i += 1
-            out.write(frame)
         else:
             break
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-    if WRITE_POINTS_TO_DB:
-        db_connection.close()
     cap.release()
     out.release()
+
+
+def analyse_SYSU3DAction_video(db_connection, path, actor, video):
+    tmp_points = scipy.io.loadmat(
+        os.path.join(path, actor, video, 'sklImage.mat'))[
+        'S']
+    points = np.ndarray([len(tmp_points[0][0]), len(tmp_points), 3])
+    for i in range(len(points)):
+        for j in range(len(points[0])):
+            points[i][j][0] = tmp_points[j][0][i]
+            points[i][j][1] = tmp_points[j][1][i]
+            points[i][j][2] = 1.1 * CONFIDENCE
+
+    origin_points = np.ndarray([len(points), UNIVERSAL_POINTS_NUMBER, 3])
+    for i in range(len(points)):
+        origin_points[i] = convert_kinect_v1(points[i])
+    analyse_images(db_connection, os.path.join(path, actor, video, 'rgb'), origin_points, f'{actor}_{video}')
+
+
+def analyse_SYSU3DAction(db_connection, path, analyse_all=True, activity_number=0):
+    for actor in os.listdir(path):
+        if analyse_all:
+            for video in os.listdir(os.path.join(path, actor)):
+                analyse_SYSU3DAction_video(db_connection, path, actor, video)
+        else:
+            video = f'video{activity_number}'
+            analyse_SYSU3DAction_video(db_connection, path, actor, video)
+
+
+def main():
+    if WRITE_POINTS_TO_FILE:
+        open(POINTS_FILENAME, 'w').close()
+    kinect_origin_file = open('FileSkeleton.txt', 'r')
+
+    db_connection = None
+    if WRITE_POINTS_TO_DB:
+        db_connection = sqlite3.connect(DATABASE_FILE)
+
+    match WORK_TYPE:
+        case WorkTypes.single_video:
+            filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
+            analyse_video(db_connection, filename)
+        case WorkTypes.SYSU3DAction:
+            analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
+
+    if WRITE_POINTS_TO_DB:
+        db_connection.close()
+
     cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
