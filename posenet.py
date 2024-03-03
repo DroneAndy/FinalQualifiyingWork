@@ -34,7 +34,7 @@ LIBRARY = Libraries.move_net
 CONVERT_TO_UNIVERSAL_SKELETON = True
 DRAW_KINECT_ORIGIN_SKELETON = True
 WRITE_POINTS_TO_DB = True
-DATABASE_FILE = 'test_db2'
+DATABASE_FILE = 'MoveNet_SYSU3DAction_03_03_24'
 
 WRITE_POINTS_TO_FILE = False
 POINTS_FILENAME = 'test.txt'
@@ -45,6 +45,8 @@ SKELETON_THICKNESS = 1
 SKELETON_POINTS_RADIOS = 3
 
 HIP_COEFFICIENT = 1.01
+SHOULDER_COEFFICIENT_Y = 1.05
+SHOULDER_COEFFICIENT_X = 1.01
 
 kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6], [7, 16], [7, 8],
                       [8, 9], [0, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15]]
@@ -112,9 +114,13 @@ def get_middle_point(a, b):
 def convert_posenet(points):
     """ Преобразование скелетной модели posenet (movenet) к универсальной модели """
     new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
-    new_points[3] = points[0]
+    new_points[3][0] = (points[0][0] + points[1][0] + points[2][0] + points[3][0] + points[4][0]) / 5
+    new_points[3][1] = (points[0][1] + points[1][1] + points[2][1] + points[3][1] + points[4][1]) / 5
+    new_points[3][2] = (points[0][2] + points[1][2] + points[2][2] + points[3][2] + points[4][2]) / 5
     new_points[16] = get_middle_point(points[5], points[6])
     new_points[4] = points[6]
+    new_points[4][0] = points[6][0] * SHOULDER_COEFFICIENT_X
+    new_points[4][1] = points[6][1] * SHOULDER_COEFFICIENT_Y
     new_points[5] = points[8]
     new_points[6] = points[10]
     new_points[10] = points[12]
@@ -122,6 +128,8 @@ def convert_posenet(points):
     new_points[11] = points[14]
     new_points[12] = points[16]
     new_points[7] = points[5]
+    new_points[7][0] = points[5][0] / SHOULDER_COEFFICIENT_X
+    new_points[7][1] = points[5][1] * SHOULDER_COEFFICIENT_Y
     new_points[8] = points[7]
     new_points[9] = points[9]
     new_points[13] = points[11]
@@ -249,7 +257,7 @@ def analyse_images(db_connection, images_path, origin_points, out_filename):
     out.release()
 
 
-def analyse_video(db_connection, filename):
+def analyse_video(db_connection, filename, kinect_file):
     file_id = -1
     if WRITE_POINTS_TO_DB:
         curs = db_connection.cursor()
@@ -268,7 +276,7 @@ def analyse_video(db_connection, filename):
         if ret:
             current_kinect_points = np.ndarray([0, 0])
             if DRAW_KINECT_ORIGIN_SKELETON:
-                current_kinect_points = get_kinect_origin_points()
+                current_kinect_points = get_kinect_origin_points(kinect_file)
             analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id)
             i += 1
         else:
@@ -320,7 +328,7 @@ def main():
     match WORK_TYPE:
         case WorkTypes.single_video:
             filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
-            analyse_video(db_connection, filename)
+            analyse_video(db_connection, filename, kinect_origin_file)
         case WorkTypes.SYSU3DAction:
             analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
 
