@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 import datetime
 import enum
+import posenet
 
 
 class WorkTypes(enum.Enum):
@@ -17,29 +18,27 @@ class WorkTypes(enum.Enum):
 
 
 class Libraries(enum.Enum):
-    move_net = 0
+    move_net = 0,
+    pose_net = 1
 
-
-model = hub.load(
-    "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
-movenet = model.signatures['serving_default']
 
 POSENET_POINTS_NUMBER = 17
 UNIVERSAL_POINTS_NUMBER = 17
 SKELETON_NUMBER = 6
-CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке
+# CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке
+CONFIDENCE = 0.15  # 0.4 это коэффициент уверенности в точке
 
-LIBRARY = Libraries.move_net
+LIBRARY = Libraries.pose_net
 
 CONVERT_TO_UNIVERSAL_SKELETON = True
 DRAW_KINECT_ORIGIN_SKELETON = True
-WRITE_POINTS_TO_DB = True
-DATABASE_FILE = 'MoveNet_SYSU3DAction_03_03_24'
+WRITE_POINTS_TO_DB = False
+DATABASE_FILE = 'test_db3'
 
 WRITE_POINTS_TO_FILE = False
 POINTS_FILENAME = 'test.txt'
 
-SHOW_FRAME = False
+SHOW_FRAME = True
 
 SKELETON_THICKNESS = 1
 SKELETON_POINTS_RADIOS = 3
@@ -54,7 +53,17 @@ kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6],
 posenet_connections = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
                        [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
 
-WORK_TYPE = WorkTypes.SYSU3DAction
+WORK_TYPE = WorkTypes.single_video
+
+if LIBRARY == Libraries.move_net:
+    model = hub.load(
+        "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
+    movenet = model.signatures['serving_default']
+else:
+    if LIBRARY == Libraries.pose_net:
+        sess = tf.compat.v1.Session()
+        model_cfg, model_outputs = posenet.load_model(101, sess, '/posenet/_models')
+        output_stride = model_cfg['output_stride']
 
 
 def get_movenet_skeletal_data(image):
@@ -73,8 +82,8 @@ def get_movenet_skeletal_data(image):
 
     key_points_list = []
     for key_points_with_score in key_points_with_scores:
-        key_points = np.ndarray([17, 3])
-        for index in range(17):
+        key_points = np.ndarray([POSENET_POINTS_NUMBER, 3])
+        for index in range(POSENET_POINTS_NUMBER):
             key_points[index][0] = round(image_width *
                                          key_points_with_score[(index * 3) + 1])
             key_points[index][1] = round(image_height *
@@ -82,6 +91,40 @@ def get_movenet_skeletal_data(image):
             key_points[index][2] = key_points_with_score[(index * 3) + 2]
         key_points_list.append(key_points)
     return key_points_list
+
+
+def get_posenet_skeleton_data(image):
+    # with tf.compat.v1.Session() as sess:
+    #     model_cfg, model_outputs = posenet.load_model(101, sess, '/posenet/_models')
+    #     output_stride = model_cfg['output_stride']
+
+    input_image, draw_image, output_scale = posenet.read_img(
+        image, output_stride=output_stride)
+        # image, scale_factor=args.scale_factor, output_stride=output_stride)
+
+    heatmaps_result, offsets_result, displacement_fwd_result, displacement_bwd_result = sess.run(
+        model_outputs,
+        feed_dict={'image:0': input_image}
+    )
+
+    pose_scores, keypoint_scores, keypoint_coords = posenet.decode_multiple_poses(
+        heatmaps_result.squeeze(axis=0),
+        offsets_result.squeeze(axis=0),
+        displacement_fwd_result.squeeze(axis=0),
+        displacement_bwd_result.squeeze(axis=0),
+        output_stride=output_stride,
+        max_pose_detections=10,
+        min_pose_score=0.25)
+
+    keypoint_coords *= output_scale
+    keypoint_with_scores = np.ndarray([len(keypoint_coords), POSENET_POINTS_NUMBER, 3])
+    for i in range(len(keypoint_coords)):
+        for j in range(POSENET_POINTS_NUMBER):
+            keypoint_with_scores[i][j][0] = keypoint_coords[i][j][1]
+            keypoint_with_scores[i][j][1] = keypoint_coords[i][j][0]
+            keypoint_with_scores[i][j][2] = keypoint_scores[i][j]
+
+    return keypoint_with_scores
 
 
 def draw_skeleton(im, points, connections, skeleton_color):
@@ -199,6 +242,8 @@ def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_i
     match LIBRARY:
         case Libraries.move_net:
             skeletons = get_movenet_skeletal_data(frame)
+        case Libraries.pose_net:
+            skeletons = get_posenet_skeleton_data(frame)
     frame = frame.astype(np.uint8)
 
     for j in range(SKELETON_NUMBER):
