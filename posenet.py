@@ -237,7 +237,7 @@ def get_average_skeleton_confidence(points):
     return conf / len(points)
 
 
-def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id):
+def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id, start_time):
     skeletons = np.ndarray([0])
     match LIBRARY:
         case Libraries.move_net:
@@ -267,12 +267,15 @@ def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_i
             if WRITE_POINTS_TO_DB:
                 write_points_to_db(db_connection, file_id, current_points, origin_points, frame_number)
 
+    cv2.putText(frame, f'frame: {frame_number}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    cv2.putText(frame, f'frame rate: {frame_number / (datetime.datetime.now() - start_time).total_seconds()}', (10, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     if SHOW_FRAME:
         cv2.imshow('frame', frame)
     out.write(frame)
 
 
-def analyse_images(db_connection, images_path, origin_points, out_filename):
+def analyse_images(db_connection, images_path, origin_points, out_filename, start_time):
     image_width = round(cv2.imread(os.path.join(images_path, os.listdir(images_path)[0])).shape[1])
     image_height = round(cv2.imread(os.path.join(images_path, os.listdir(images_path)[0])).shape[0])
 
@@ -297,12 +300,12 @@ def analyse_images(db_connection, images_path, origin_points, out_filename):
             if frame is None:
                 print(f'can not read {os.path.join(images_path, img)}')
                 continue
-            analyse_frame(frame, i, out, origin_points[i], db_connection, file_id)
+            analyse_frame(frame, i, out, origin_points[i], db_connection, file_id, start_time)
             i += 1
     out.release()
 
 
-def analyse_video(db_connection, filename, kinect_file):
+def analyse_video(db_connection, filename, kinect_file, start_time):
     file_id = -1
     if WRITE_POINTS_TO_DB:
         curs = db_connection.cursor()
@@ -322,7 +325,7 @@ def analyse_video(db_connection, filename, kinect_file):
             current_kinect_points = np.ndarray([0, 0])
             if DRAW_KINECT_ORIGIN_SKELETON:
                 current_kinect_points = get_kinect_origin_points(kinect_file)
-            analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id)
+            analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id, start_time)
             i += 1
         else:
             break
@@ -373,7 +376,7 @@ def main():
     match WORK_TYPE:
         case WorkTypes.single_video:
             filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
-            analyse_video(db_connection, filename, kinect_origin_file)
+            analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now())
         case WorkTypes.SYSU3DAction:
             analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
 
