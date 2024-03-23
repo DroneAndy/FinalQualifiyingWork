@@ -25,13 +25,15 @@ class Libraries(enum.Enum):
 POSENET_POINTS_NUMBER = 17
 UNIVERSAL_POINTS_NUMBER = 17
 SKELETON_NUMBER = 6
-# CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке
-CONFIDENCE = 0.15  # 0.4 это коэффициент уверенности в точке
+CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке
 
-LIBRARY = Libraries.pose_net
+# Уверенность для PoseNet
+# CONFIDENCE = 0.05  # 0.15 - стандартное значение из примера
+
+LIBRARY = Libraries.move_net
 
 CONVERT_TO_UNIVERSAL_SKELETON = True
-DRAW_KINECT_ORIGIN_SKELETON = True
+DRAW_KINECT_ORIGIN_SKELETON = False
 WRITE_POINTS_TO_DB = False
 DATABASE_FILE = 'test_db3'
 
@@ -237,7 +239,7 @@ def get_average_skeleton_confidence(points):
     return conf / len(points)
 
 
-def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id, start_time):
+def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id, start_time, start_frame = 0):
     skeletons = np.ndarray([0])
     match LIBRARY:
         case Libraries.move_net:
@@ -268,7 +270,7 @@ def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_i
                 write_points_to_db(db_connection, file_id, current_points, origin_points, frame_number)
 
     cv2.putText(frame, f'frame: {frame_number}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    cv2.putText(frame, f'frame rate: {frame_number / (datetime.datetime.now() - start_time).total_seconds()}', (10, 40),
+    cv2.putText(frame, f'frame rate: {(frame_number - start_frame) / (datetime.datetime.now() - start_time).total_seconds()}', (10, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
     if SHOW_FRAME:
         cv2.imshow('frame', frame)
@@ -305,7 +307,7 @@ def analyse_images(db_connection, images_path, origin_points, out_filename, star
     out.release()
 
 
-def analyse_video(db_connection, filename, kinect_file, start_time):
+def analyse_video(db_connection, filename, kinect_file, start_time, begin_frame=0, end_frame=-1):
     file_id = -1
     if WRITE_POINTS_TO_DB:
         curs = db_connection.cursor()
@@ -318,14 +320,15 @@ def analyse_video(db_connection, filename, kinect_file, start_time):
     out = cv2.VideoWriter(f'{Path(filename).stem}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
                           , fourcc, cap.get(cv2.CAP_PROP_FPS)
                           , (round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
-    i = 0
-    while cap.isOpened():
+    i = begin_frame
+    cap.set(cv2.CAP_PROP_POS_FRAMES, begin_frame)
+    while cap.isOpened() and (cap.get(cv2.CAP_PROP_POS_FRAMES) <= end_frame or end_frame == -1):
         ret, frame = cap.read()
         if ret:
             current_kinect_points = np.ndarray([0, 0])
             if DRAW_KINECT_ORIGIN_SKELETON:
                 current_kinect_points = get_kinect_origin_points(kinect_file)
-            analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id, start_time)
+            analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id, start_time, start_frame=begin_frame)
             i += 1
         else:
             break
@@ -376,7 +379,7 @@ def main():
     match WORK_TYPE:
         case WorkTypes.single_video:
             filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
-            analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now())
+            analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now(), begin_frame=3000, end_frame=4000)
         case WorkTypes.SYSU3DAction:
             analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
 
