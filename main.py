@@ -1,3 +1,5 @@
+import sys
+
 import scipy
 import tensorflow as tf
 import tensorflow_hub as hub
@@ -28,22 +30,23 @@ class Libraries(enum.Enum):
     move_net = 0
     pose_net = 1
     alpha_pose = 2
+    open_pose = 3
 
 
 POSENET_POINTS_NUMBER = 17
 UNIVERSAL_POINTS_NUMBER = 17
 ALPHAPOSE_POINTS_NUMBER = 26
 SKELETON_NUMBER = 6
-# CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке (MoveNet)
-CONFIDENCE = 0.5  # Уверенность для AlphaPose
+CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке (MoveNet)
+# CONFIDENCE = 0.5  # Уверенность для AlphaPose
 
 # Уверенность для PoseNet
 # CONFIDENCE = 0.05  # 0.15 - стандартное значение из примера
 
-LIBRARY = Libraries.alpha_pose
+LIBRARY = Libraries.move_net
 
 CONVERT_TO_UNIVERSAL_SKELETON = True
-DRAW_KINECT_ORIGIN_SKELETON = False
+DRAW_KINECT_ORIGIN_SKELETON = True
 WRITE_POINTS_TO_DB = False
 DATABASE_FILE = 'test_db3'
 
@@ -71,15 +74,40 @@ if LIBRARY == Libraries.move_net:
     model = hub.load(
         "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
     movenet = model.signatures['serving_default']
-else:
-    if LIBRARY == Libraries.pose_net:
-        sess = tf.compat.v1.Session()
-        model_cfg, model_outputs = posenet.load_model(101, sess, '/posenet/_models')
-        output_stride = model_cfg['output_stride']
-    else:
-        if LIBRARY == Libraries.alpha_pose:
-            demo = demo_api2.SingleImageAlphaPose(demo_api2.get_default_args(),
-                                                  update_config('configs/halpe_26/resnet/256x192_res50_lr1e-3_1x.yaml'))
+elif LIBRARY == Libraries.pose_net:
+    sess = tf.compat.v1.Session()
+    model_cfg, model_outputs = posenet.load_model(101, sess, '/posenet/_models')
+    output_stride = model_cfg['output_stride']
+elif LIBRARY == Libraries.alpha_pose:
+    demo = demo_api2.SingleImageAlphaPose(demo_api2.get_default_args(),
+                                          update_config('configs/halpe_26/resnet/256x192_res50_lr1e-3_1x.yaml'))
+elif LIBRARY == Libraries.open_pose:
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    try:
+        # Change these variables to point to the correct folder (Release/x64 etc.)
+        sys.path.append(dir_path + '/bin/python/openpose/Release')
+        os.environ['PATH'] = os.environ['PATH'] + ';' + dir_path + '/x64/Release;' + dir_path + '/bin;'
+        import pyopenpose as op
+    except ImportError as e:
+        print(
+            'Error: OpenPose library could not be found. Did you enable `BUILD_PYTHON` in CMake and have this Python script in the right folder?')
+        raise e
+
+
+    # Custom Params (refer to include/openpose/flags.hpp for more parameters)
+    params = dict()
+    params["model_folder"] = "models/"
+
+    opWrapper = op.WrapperPython()
+    opWrapper.configure(params)
+    opWrapper.start()
+
+
+def get_openpose_skeletal_data(image):
+    datum = op.Datum()
+    datum.cvInputData = image
+    opWrapper.emplaceAndPop(op.VectorDatum([datum]))
+    return datum.poseKeypoints
 
 
 def get_alphapose_skeletal_data(image):
@@ -274,7 +302,33 @@ def convert_alphapose(points):
     return new_points
 
 
-def get_kinect_origin_points(kinect_origin_file):
+def convert_openpose(points):
+    """ Преобразование скелетной модели openpose к универсальной модели """
+    new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+    new_points[3][0] = (points[0][0] + points[15][0] + points[16][0] + points[17][0] + points[18][0]) / 5
+    new_points[3][1] = (points[0][1] + points[15][1] + points[16][1] + points[17][1] + points[18][1]) / 5
+    new_points[3][2] = (points[0][2] + points[15][2] + points[16][2] + points[17][2] + points[18][2]) / 5
+    new_points[4] = points[2]
+    new_points[5] = points[3]
+    new_points[6] = points[4]
+    new_points[10] = points[9]
+    new_points[11] = points[10]
+    new_points[12] = points[11]
+    new_points[7] = points[5]
+    new_points[8] = points[6]
+    new_points[9] = points[7]
+    new_points[13] = points[12]
+    new_points[14] = points[13]
+    new_points[15] = points[14]
+    new_points[0] = points[8]
+    new_points[1] = get_middle_point(points[1], points[8])
+    new_points[2] = get_middle_point(points[0], points[1])
+
+    new_points[16] = points[1]
+    return new_points
+
+
+def get_kinect_origin_points_1(kinect_origin_file):
     kinect_origin_file.readline()
     points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
     for j in range(UNIVERSAL_POINTS_NUMBER):
@@ -306,16 +360,17 @@ def get_average_skeleton_confidence(points):
 
 def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id, start_time, start_frame=0):
     skeletons = np.ndarray([0])
-    match LIBRARY:
-        case Libraries.move_net:
-            skeletons = get_movenet_skeletal_data(frame)
-        case Libraries.pose_net:
-            skeletons = get_posenet_skeleton_data(frame)
-        case Libraries.alpha_pose:
-            skeletons = get_alphapose_skeletal_data(frame)
+    if LIBRARY == Libraries.move_net:
+        skeletons = get_movenet_skeletal_data(frame)
+    elif LIBRARY == Libraries.pose_net:
+        skeletons = get_posenet_skeleton_data(frame)
+    elif LIBRARY == Libraries.alpha_pose:
+        skeletons = get_alphapose_skeletal_data(frame)
+    elif LIBRARY == Libraries.open_pose:
+        skeletons = get_openpose_skeletal_data(frame)
+
     frame = frame.astype(np.uint8)
 
-    # for j in range(SKELETON_NUMBER):
     for j in range(len(skeletons)):
         current_points = skeletons[j]
         if WRITE_POINTS_TO_FILE:
@@ -324,13 +379,14 @@ def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_i
 
         if get_average_skeleton_confidence(current_points) > CONFIDENCE:
             if CONVERT_TO_UNIVERSAL_SKELETON:
-                match LIBRARY:
-                    case Libraries.move_net:
-                        current_points = convert_posenet(current_points)
-                    case Libraries.pose_net:
-                        current_points = convert_posenet(current_points)
-                    case Libraries.alpha_pose:
-                        current_points = convert_alphapose(current_points)
+                if LIBRARY == Libraries.move_net:
+                    current_points = convert_posenet(current_points)
+                elif LIBRARY == Libraries.pose_net:
+                    current_points = convert_posenet(current_points)
+                elif LIBRARY == Libraries.alpha_pose:
+                    current_points = convert_alphapose(current_points)
+                elif LIBRARY == Libraries.open_pose:
+                    current_points = convert_openpose(current_points)
                 draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
             else:
                 draw_skeleton(frame, current_points, posenet_connections, (0, 255, 0))
@@ -450,14 +506,13 @@ def main():
     if WRITE_POINTS_TO_DB:
         db_connection = sqlite3.connect(DATABASE_FILE)
 
-    match WORK_TYPE:
-        case WorkTypes.single_video:
-            # filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
-            filename = '0002-M.avi'  # файл, по которому строим скелетные модели
-            # analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now())
-            analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now(), begin_frame=3000, end_frame=4000)
-        case WorkTypes.SYSU3DAction:
-            analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
+    if WORK_TYPE == WorkTypes.single_video:
+        filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
+        # filename = '0002-M.avi'  # файл, по которому строим скелетные модели
+        analyse_video(db_connection, filename, kinect_points, datetime.datetime.now())
+        # analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now(), begin_frame=3000, end_frame=4000)
+    elif WORK_TYPE == WorkTypes.SYSU3DAction:
+        analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
 
     if WRITE_POINTS_TO_DB:
         db_connection.close()
