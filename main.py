@@ -50,8 +50,8 @@ DRAW_KINECT_ORIGIN_SKELETON = True
 WRITE_POINTS_TO_DB = False
 DATABASE_FILE = 'test_db3'
 
-WRITE_POINTS_TO_FILE = False
-POINTS_FILENAME = 'test.txt'
+WRITE_POINTS_TO_FILE = True
+POINTS_FILENAME = 'test123.txt'
 
 SHOW_FRAME = True
 
@@ -321,10 +321,10 @@ def convert_openpose(points):
     new_points[14] = points[13]
     new_points[15] = points[14]
     new_points[0] = points[8]
+    new_points[16] = points[1]
     new_points[1] = get_middle_point(points[1], points[8])
     new_points[2] = get_middle_point(points[0], points[1])
 
-    new_points[16] = points[1]
     return new_points
 
 
@@ -337,6 +337,27 @@ def get_kinect_origin_points_1(kinect_origin_file):
         points[j][1] = round(float(tmp[5]))
         points[j][2] = round(float(tmp[3])) * CONFIDENCE * 1.1
     return points
+
+
+def get_kinect_origin_points_2(kinect_origin_file):
+    skeleton_kinect = []
+    key_points = [0, 1, 2, 3, 4, 5, 6, 8, 9, 10,
+                  12, 13, 14, 16, 17, 18, 20, ]
+    M = np.asarray([
+        [1030, 0, 980],
+        [0, -1100, 530],
+        [0, 0, 1],
+    ])
+    video = np.loadtxt(kinect_origin_file, delimiter=' ', )
+    for i, line in enumerate(video):
+        skeleton_kinect.append([])
+        # skeleton_kinect[f'frame {i}'] = []
+        if np.sum(np.abs(line[:75])):
+            skeleton_kinect[i] = line[:75].reshape(25, 3)[np.ix_(key_points)]
+    for i in range(len(skeleton_kinect)):
+        skeleton_kinect[i] = np.asarray([np.dot(M, s.T) for s in skeleton_kinect[i]])
+        skeleton_kinect[i][:, :] /= skeleton_kinect[i][:, -1].reshape(-1, 1)
+    return skeleton_kinect
 
 
 def write_points_to_db(connect, file_id, points, kinect_points, frame_number):
@@ -437,7 +458,7 @@ def analyse_images(db_connection, images_path, origin_points, out_filename, star
     out.release()
 
 
-def analyse_video(db_connection, filename, kinect_file, start_time, begin_frame=0, end_frame=-1):
+def analyse_video(db_connection, filename, current_kinect_points, start_time, begin_frame=0, end_frame=-1):
     file_id = -1
     if WRITE_POINTS_TO_DB:
         curs = db_connection.cursor()
@@ -447,7 +468,7 @@ def analyse_video(db_connection, filename, kinect_file, start_time, begin_frame=
         db_connection.commit()
     cap = cv2.VideoCapture(filename)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(f'{Path(filename).stem}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
+    out = cv2.VideoWriter(f'{Path(filename).stem}_{LIBRARY.name}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
                           , fourcc, cap.get(cv2.CAP_PROP_FPS)
                           , (round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
     i = begin_frame
@@ -455,10 +476,7 @@ def analyse_video(db_connection, filename, kinect_file, start_time, begin_frame=
     while cap.isOpened() and (cap.get(cv2.CAP_PROP_POS_FRAMES) <= end_frame or end_frame == -1):
         ret, frame = cap.read()
         if ret:
-            current_kinect_points = np.ndarray([0, 0])
-            if DRAW_KINECT_ORIGIN_SKELETON:
-                current_kinect_points = get_kinect_origin_points(kinect_file)
-            analyse_frame(frame, i, out, current_kinect_points, db_connection, file_id, start_time, start_frame=begin_frame)
+            analyse_frame(frame, i, out, current_kinect_points[i], db_connection, file_id, start_time, start_frame=begin_frame)
             i += 1
         else:
             break
@@ -507,10 +525,18 @@ def main():
         db_connection = sqlite3.connect(DATABASE_FILE)
 
     if WORK_TYPE == WorkTypes.single_video:
+        # kinect_origin_file = open('FileSkeleton.txt', 'r')
+        kinect_origin_file = open('0002-M.txt', 'r')
+        # kinect_points = np.ndarray(0)
+        # if DRAW_KINECT_ORIGIN_SKELETON:
+        #     kinect_points = get_kinect_origin_points_1(kinect_origin_file)
         filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
-        # filename = '0002-M.avi'  # файл, по которому строим скелетные модели
-        analyse_video(db_connection, filename, kinect_points, datetime.datetime.now())
-        # analyse_video(db_connection, filename, kinect_origin_file, datetime.datetime.now(), begin_frame=3000, end_frame=4000)
+
+        kinect_points = get_kinect_origin_points_2(kinect_origin_file)
+
+        filename = '0002-M.avi'  # файл, по которому строим скелетные модели
+        # analyse_video(db_connection, filename, kinect_points, datetime.datetime.now())
+        analyse_video(db_connection, filename, kinect_points, datetime.datetime.now(), begin_frame=3000, end_frame=4000)
     elif WORK_TYPE == WorkTypes.SYSU3DAction:
         analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
 
