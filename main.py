@@ -1,253 +1,298 @@
 import sys
-
-import scipy
+from argparse import Namespace
 import tensorflow as tf
 import tensorflow_hub as hub
 import sqlite3
 from pathlib import Path
 import datetime
-import enum
-
-import alphapose
+import torch
 import posenet
 import os
-
 import cv2
 import numpy as np
-
-import demo_api2
-
+import alphapose_api
 from alphapose.utils.config import update_config
 
 
-class WorkTypes(enum.Enum):
-    single_video = 0,
-    images = 1,
-    SYSU3DAction = 2
-
-
-class Libraries(enum.Enum):
-    move_net = 0
-    pose_net = 1
-    alpha_pose = 2
-    open_pose = 3
-
-
-POSENET_POINTS_NUMBER = 17
 UNIVERSAL_POINTS_NUMBER = 17
-ALPHAPOSE_POINTS_NUMBER = 26
-SKELETON_NUMBER = 6
-CONFIDENCE = 0.3  # 0.4 это коэффициент уверенности в точке (MoveNet)
-# CONFIDENCE = 0.5  # Уверенность для AlphaPose
-
-# Уверенность для PoseNet
-# CONFIDENCE = 0.05  # 0.15 - стандартное значение из примера
-
-LIBRARY = Libraries.move_net
-
-CONVERT_TO_UNIVERSAL_SKELETON = True
-DRAW_KINECT_ORIGIN_SKELETON = True
-WRITE_POINTS_TO_DB = False
-DATABASE_FILE = 'test_db3'
-
-WRITE_POINTS_TO_FILE = True
-POINTS_FILENAME = 'test123.txt'
-
-SHOW_FRAME = True
-
-SKELETON_THICKNESS = 1
-SKELETON_POINTS_RADIOS = 3
-
-HIP_COEFFICIENT = 1.01
-SHOULDER_COEFFICIENT_Y = 1.05
-SHOULDER_COEFFICIENT_X = 1.01
-
-kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6], [7, 16], [7, 8],
-                      [8, 9], [0, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15]]
-
-posenet_connections = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
-                       [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
-
-WORK_TYPE = WorkTypes.single_video
-
-if LIBRARY == Libraries.move_net:
-    model = hub.load(
-        "https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1")
-    movenet = model.signatures['serving_default']
-elif LIBRARY == Libraries.pose_net:
-    sess = tf.compat.v1.Session()
-    model_cfg, model_outputs = posenet.load_model(101, sess, '/posenet/_models')
-    output_stride = model_cfg['output_stride']
-elif LIBRARY == Libraries.alpha_pose:
-    demo = demo_api2.SingleImageAlphaPose(demo_api2.get_default_args(),
-                                          update_config('configs/halpe_26/resnet/256x192_res50_lr1e-3_1x.yaml'))
-elif LIBRARY == Libraries.open_pose:
-    dir_path = os.path.dirname(os.path.realpath(__file__))
-    try:
-        # Change these variables to point to the correct folder (Release/x64 etc.)
-        sys.path.append(dir_path + '/bin/python/openpose/Release')
-        os.environ['PATH'] = os.environ['PATH'] + ';' + dir_path + '/x64/Release;' + dir_path + '/bin;'
-        import pyopenpose as op
-    except ImportError as e:
-        print(
-            'Error: OpenPose library could not be found. Did you enable `BUILD_PYTHON` in CMake and have this Python script in the right folder?')
-        raise e
 
 
-    # Custom Params (refer to include/openpose/flags.hpp for more parameters)
-    params = dict()
-    params["model_folder"] = "models/"
+class Library:
+    ID = -1
 
-    opWrapper = op.WrapperPython()
-    opWrapper.configure(params)
-    opWrapper.start()
+    def __init__(self, confidence=0.3):
+        self.confidence = confidence
 
+    def get_skeleton_data(self, image):
+        return 0
 
-def get_openpose_skeletal_data(image):
-    datum = op.Datum()
-    datum.cvInputData = image
-    opWrapper.emplaceAndPop(op.VectorDatum([datum]))
-    return datum.poseKeypoints
+    def convert(self, points):
+        return points
 
 
-def get_alphapose_skeletal_data(image):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    pose = demo.process('', image)
-    results = pose.get("result")
-    keypoint_with_scores = np.ndarray([len(results), ALPHAPOSE_POINTS_NUMBER, 3])
-    for i in range(len(results)):
-        for j in range(ALPHAPOSE_POINTS_NUMBER):
-            keypoint_with_scores[i][j][0] = results[i].get("keypoints")[j][0]
-            keypoint_with_scores[i][j][1] = results[i].get("keypoints")[j][1]
-            keypoint_with_scores[i][j][2] = results[i].get("kp_score")[j][0]
+class Movenet(Library):
+    ID = 0
+    POINTS_NUMBER = 17
+    HIP_COEFFICIENT = 1.01
+    SHOULDER_COEFFICIENT_Y = 1.05
+    SHOULDER_COEFFICIENT_X = 1.01
+    CONNECTIONS = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
+                   [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
 
-    return keypoint_with_scores
+    def __init__(self, confidence=0.3,
+                 model_url="https://www.kaggle.com/models/google/movenet/frameworks/TensorFlow2/variations/multipose-lightning/versions/1"):
+        super().__init__(confidence=confidence)
+        model = hub.load(model_url)
+        self.movenet = model.signatures['serving_default']
 
+    def get_skeleton_data(self, image):
+        image_width, image_height = image.shape[1], image.shape[0]
 
-def get_movenet_skeletal_data(image):
+        input_image = cv2.resize(image, dsize=(256, 256))
+        input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
+        input_image = input_image.reshape(-1, 256, 256, 3)
+        input_image = tf.cast(input_image, dtype=tf.int32)
 
-    image_width, image_height = image.shape[1], image.shape[0]
+        outputs = self.movenet(input_image)
 
-    input_image = cv2.resize(image, dsize=(256, 256))
-    input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
-    input_image = input_image.reshape(-1, 256, 256, 3)
-    input_image = tf.cast(input_image, dtype=tf.int32)
+        key_points_with_scores = outputs['output_0'].numpy()
+        key_points_with_scores = np.squeeze(key_points_with_scores)
 
-    outputs = movenet(input_image)
+        key_points_list = []
+        for key_points_with_score in key_points_with_scores:
+            key_points = np.ndarray([self.POINTS_NUMBER, 3])
+            for index in range(self.POINTS_NUMBER):
+                key_points[index][0] = round(image_width *
+                                             key_points_with_score[(index * 3) + 1])
+                key_points[index][1] = round(image_height *
+                                             key_points_with_score[(index * 3) + 0])
+                key_points[index][2] = key_points_with_score[(index * 3) + 2]
+            key_points_list.append(key_points)
+        return key_points_list
 
-    key_points_with_scores = outputs['output_0'].numpy()
-    key_points_with_scores = np.squeeze(key_points_with_scores)
-
-    key_points_list = []
-    for key_points_with_score in key_points_with_scores:
-        key_points = np.ndarray([POSENET_POINTS_NUMBER, 3])
-        for index in range(POSENET_POINTS_NUMBER):
-            key_points[index][0] = round(image_width *
-                                         key_points_with_score[(index * 3) + 1])
-            key_points[index][1] = round(image_height *
-                                         key_points_with_score[(index * 3) + 0])
-            key_points[index][2] = key_points_with_score[(index * 3) + 2]
-        key_points_list.append(key_points)
-    return key_points_list
-
-
-def get_posenet_skeleton_data(image):
-    # with tf.compat.v1.Session() as sess:
-    #     model_cfg, model_outputs = posenet.load_model(101, sess, '/posenet/_models')
-    #     output_stride = model_cfg['output_stride']
-
-    input_image, draw_image, output_scale = posenet.read_img(
-        image, output_stride=output_stride)
-        # image, scale_factor=args.scale_factor, output_stride=output_stride)
-
-    heatmaps_result, offsets_result, displacement_fwd_result, displacement_bwd_result = sess.run(
-        model_outputs,
-        feed_dict={'image:0': input_image}
-    )
-
-    pose_scores, keypoint_scores, keypoint_coords = posenet.decode_multiple_poses(
-        heatmaps_result.squeeze(axis=0),
-        offsets_result.squeeze(axis=0),
-        displacement_fwd_result.squeeze(axis=0),
-        displacement_bwd_result.squeeze(axis=0),
-        output_stride=output_stride,
-        max_pose_detections=10,
-        min_pose_score=0.25)
-
-    keypoint_coords *= output_scale
-    keypoint_with_scores = np.ndarray([len(keypoint_coords), POSENET_POINTS_NUMBER, 3])
-    for i in range(len(keypoint_coords)):
-        for j in range(POSENET_POINTS_NUMBER):
-            keypoint_with_scores[i][j][0] = keypoint_coords[i][j][1]
-            keypoint_with_scores[i][j][1] = keypoint_coords[i][j][0]
-            keypoint_with_scores[i][j][2] = keypoint_scores[i][j]
-
-    return keypoint_with_scores
+    def convert(self, points):
+        """ Преобразование скелетной модели posenet (movenet) к универсальной модели """
+        new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+        new_points[3] = get_middle_point([points[0], points[1], points[2], points[3], points[4]])
+        new_points[16] = get_middle_point([points[5], points[6]])
+        new_points[4] = points[6]
+        new_points[4][0] = points[6][0] * self.SHOULDER_COEFFICIENT_X
+        new_points[4][1] = points[6][1] * self.SHOULDER_COEFFICIENT_Y
+        new_points[5] = points[8]
+        new_points[6] = points[10]
+        new_points[10] = points[12]
+        new_points[10][0] = points[12][0] * self.HIP_COEFFICIENT
+        new_points[11] = points[14]
+        new_points[12] = points[16]
+        new_points[7] = points[5]
+        new_points[7][0] = points[5][0] / self.SHOULDER_COEFFICIENT_X
+        new_points[7][1] = points[5][1] * self.SHOULDER_COEFFICIENT_Y
+        new_points[8] = points[7]
+        new_points[9] = points[9]
+        new_points[13] = points[11]
+        new_points[13][0] = points[11][0] / self.HIP_COEFFICIENT
+        new_points[14] = points[13]
+        new_points[15] = points[15]
+        new_points[0] = get_middle_point([points[11], points[12]])
+        new_points[1] = get_middle_point([new_points[16], new_points[0]])
+        new_points[2] = get_middle_point([new_points[3], new_points[16]])
+        return new_points
 
 
-def draw_skeleton(im, points, connections, skeleton_color):
-    for point in points:
-        if WRITE_POINTS_TO_FILE:
-            with open(POINTS_FILENAME, 'a') as f:
-                f.write(f"{point[0]} {point[1]} {point[2]}\n")
-        if point[2] > CONFIDENCE:
-            im = cv2.circle(im,
-                            (point[0].astype(np.int64),
-                             point[1].astype(np.int64)),
-                            radius=SKELETON_POINTS_RADIOS, color=skeleton_color, thickness=-1)
-    for connect in connections:
-        if points[connect[0]][2] > CONFIDENCE and points[connect[1]][2] > CONFIDENCE:
-            cv2.line(im,
-                     (points[connect[0]][0].astype(np.int64), points[connect[0]][1].astype(np.int64)),
-                     (points[connect[1]][0].astype(np.int64), points[connect[1]][1].astype(np.int64)),
-                     color=skeleton_color, thickness=SKELETON_THICKNESS)
+class Posenet(Library):
+    ID = 1
+    POINTS_NUMBER = 17
+    HIP_COEFFICIENT = 1.01
+    SHOULDER_COEFFICIENT_Y = 1.05
+    SHOULDER_COEFFICIENT_X = 1.01
+    CONNECTIONS = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
+                   [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
+
+    def __init__(self, confidence=0.05, model_id=101, model_dir='/posenet/_models',
+                 max_pose_detections=10, min_pose_score=0.25):
+        super().__init__(confidence=confidence)
+        self.sess = tf.compat.v1.Session()
+        self.model_cfg, self.model_outputs = posenet.load_model(model_id, self.sess, model_dir)
+        self.output_stride = self.model_cfg['output_stride']
+        self.max_pose_detections = max_pose_detections
+        self.min_pose_score = min_pose_score
+
+    def get_skeleton_data(self, image):
+        with tf.compat.v1.Session() as sess:
+            input_image, draw_image, output_scale = posenet.read_img(
+                image, output_stride=self.output_stride)
+            # image, scale_factor=args.scale_factor, output_stride=output_stride)
+
+            heatmaps_result, offsets_result, displacement_fwd_result, displacement_bwd_result = sess.run(
+                self.model_outputs,
+                feed_dict={'image:0': input_image}
+            )
+
+            pose_scores, keypoint_scores, keypoint_coords = posenet.decode_multiple_poses(
+                heatmaps_result.squeeze(axis=0),
+                offsets_result.squeeze(axis=0),
+                displacement_fwd_result.squeeze(axis=0),
+                displacement_bwd_result.squeeze(axis=0),
+                output_stride=self.output_stride,
+                max_pose_detections=self.max_pose_detections,
+                min_pose_score=self.min_pose_score)
+
+            keypoint_coords *= output_scale
+            keypoint_with_scores = np.ndarray([len(keypoint_coords), self.POINTS_NUMBER, 3])
+            for i in range(len(keypoint_coords)):
+                for j in range(self.POINTS_NUMBER):
+                    keypoint_with_scores[i][j][0] = keypoint_coords[i][j][1]
+                    keypoint_with_scores[i][j][1] = keypoint_coords[i][j][0]
+                    keypoint_with_scores[i][j][2] = keypoint_scores[i][j]
+
+            return keypoint_with_scores
+
+    def convert(self, points):
+        """ Преобразование скелетной модели posenet (movenet) к универсальной модели """
+        new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+        new_points[3] = get_middle_point([points[0], points[1], points[2], points[3], points[4]])
+        new_points[16] = get_middle_point([points[5], points[6]])
+        new_points[4] = points[6]
+        new_points[4][0] = points[6][0] * self.SHOULDER_COEFFICIENT_X
+        new_points[4][1] = points[6][1] * self.SHOULDER_COEFFICIENT_Y
+        new_points[5] = points[8]
+        new_points[6] = points[10]
+        new_points[10] = points[12]
+        new_points[10][0] = points[12][0] * self.HIP_COEFFICIENT
+        new_points[11] = points[14]
+        new_points[12] = points[16]
+        new_points[7] = points[5]
+        new_points[7][0] = points[5][0] / self.SHOULDER_COEFFICIENT_X
+        new_points[7][1] = points[5][1] * self.SHOULDER_COEFFICIENT_Y
+        new_points[8] = points[7]
+        new_points[9] = points[9]
+        new_points[13] = points[11]
+        new_points[13][0] = points[11][0] / self.HIP_COEFFICIENT
+        new_points[14] = points[13]
+        new_points[15] = points[15]
+        new_points[0] = get_middle_point([points[11], points[12]])
+        new_points[1] = get_middle_point([new_points[16], new_points[0]])
+        new_points[2] = get_middle_point([new_points[3], new_points[16]])
+        return new_points
 
 
-# Получение точки посередине
-def get_middle_point(a, b):
-    x = (a[0] + b[0]) / 2
-    y = (a[1] + b[1]) / 2
-    conf = (a[2] + b[2]) / 2
-    middle = np.array([x, y, conf])
-    return middle
+class AlphaPose(Library):
+    ID = 2
+    POINTS_NUMBER = 26
+    HIP_COEFFICIENT = 1.01
+    CONNECTIONS = [[0, 1], [1, 3], [0, 2], [2, 4]
+        , [0, 17], [0, 18], [18, 19]
+        , [5, 7], [7, 9], [6, 8], [8, 10]
+        , [19, 11], [19, 12]
+        , [12, 14], [14, 16], [11, 13], [13, 15]
+        , [16, 25], [25, 23], [21, 23], [21, 25]
+        , [15, 24], [24, 22], [20, 22], [20, 24]
+                   ]
+
+    def __init__(self, confidence=0.5, config_path='configs/halpe_26/resnet/256x192_res50_lr1e-3_1x.yaml',
+                 params=Namespace(checkpoint='./pretrained_models/halpe26_fast_res50_256x192.pth',
+                                  debug=False, detector='yolo', device=torch.device(type='cpu'), eval=False, flip=False,
+                                  format=None, gpus=[-1], min_box_area=0, pose_flow=False, pose_track=False,
+                                  profile=False, showbox=False, tracking=False, vis=False, vis_fast=False)
+                 ):
+        super().__init__(confidence=confidence)
+        self.demo = alphapose_api.SingleImageAlphaPose(params, update_config(config_path))
+
+    def get_skeleton_data(self, image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        pose = self.demo.process('', image)
+        results = pose.get("result")
+        keypoint_with_scores = np.ndarray([len(results), self.POINTS_NUMBER, 3])
+        for i in range(len(results)):
+            for j in range(self.POINTS_NUMBER):
+                keypoint_with_scores[i][j][0] = results[i].get("keypoints")[j][0]
+                keypoint_with_scores[i][j][1] = results[i].get("keypoints")[j][1]
+                keypoint_with_scores[i][j][2] = results[i].get("kp_score")[j][0]
+
+        return keypoint_with_scores
+
+    def convert(self, points):
+        """ Преобразование скелетной модели alphapose к универсальной модели """
+        new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+        new_points[3] = get_middle_point([points[0], points[1], points[2], points[3], points[4]])
+        new_points[4] = points[6]
+        new_points[5] = points[8]
+        new_points[6] = points[10]
+        new_points[10] = points[12]
+        new_points[10][0] = points[12][0] * self.HIP_COEFFICIENT
+        new_points[11] = points[14]
+        new_points[12] = points[16]
+        new_points[7] = points[5]
+        new_points[8] = points[7]
+        new_points[9] = points[9]
+        new_points[13] = points[11]
+        new_points[13][0] = points[11][0] / self.HIP_COEFFICIENT
+        new_points[14] = points[13]
+        new_points[15] = points[15]
+        new_points[0] = points[19]
+        new_points[1] = get_middle_point([points[18], points[19]])
+        new_points[2] = points[18]
+        tmp = get_middle_point([points[5], points[6]])
+        new_points[16] = get_middle_point([tmp, points[18]])
+        return new_points
 
 
-def convert_posenet(points):
-    """ Преобразование скелетной модели posenet (movenet) к универсальной модели """
-    new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
-    new_points[3][0] = (points[0][0] + points[1][0] + points[2][0] + points[3][0] + points[4][0]) / 5
-    new_points[3][1] = (points[0][1] + points[1][1] + points[2][1] + points[3][1] + points[4][1]) / 5
-    new_points[3][2] = (points[0][2] + points[1][2] + points[2][2] + points[3][2] + points[4][2]) / 5
-    new_points[16] = get_middle_point(points[5], points[6])
-    new_points[4] = points[6]
-    new_points[4][0] = points[6][0] * SHOULDER_COEFFICIENT_X
-    new_points[4][1] = points[6][1] * SHOULDER_COEFFICIENT_Y
-    new_points[5] = points[8]
-    new_points[6] = points[10]
-    new_points[10] = points[12]
-    new_points[10][0] = points[12][0] * HIP_COEFFICIENT
-    new_points[11] = points[14]
-    new_points[12] = points[16]
-    new_points[7] = points[5]
-    new_points[7][0] = points[5][0] / SHOULDER_COEFFICIENT_X
-    new_points[7][1] = points[5][1] * SHOULDER_COEFFICIENT_Y
-    new_points[8] = points[7]
-    new_points[9] = points[9]
-    new_points[13] = points[11]
-    new_points[13][0] = points[11][0] / HIP_COEFFICIENT
-    new_points[14] = points[13]
-    new_points[15] = points[15]
-    new_points[0] = get_middle_point(points[11], points[12])
-    new_points[1] = get_middle_point(new_points[16], new_points[0])
-    new_points[2] = get_middle_point(new_points[3], new_points[16])
-    return new_points
+class OpenPose(Library):
+    ID = 3
+
+    def __init__(self, confidence=0.3, params=dict([("model_folder","models/")])):
+        super().__init__(confidence=confidence)
+        dir_path = os.path.dirname(os.path.realpath(__file__))
+        try:
+            # Change these variables to point to the correct folder (Release/x64 etc.)
+            sys.path.append(dir_path + '/bin/python/openpose/Release')
+            os.environ['PATH'] = os.environ['PATH'] + ';' + dir_path + '/x64/Release;' + dir_path + '/bin;'
+            import pyopenpose as op
+            self.op = op
+        except ImportError as e:
+            print(
+                'Error: OpenPose library could not be found. Did you enable `BUILD_PYTHON` in CMake and have this Python script in the right folder?')
+            raise e
+
+        self.opWrapper = self.op.WrapperPython()
+        self.opWrapper.configure(params)
+        self.opWrapper.start()
+
+    def get_skeleton_data(self, image):
+        # import pyopenpose as op
+        datum = self.op.Datum()
+        datum.cvInputData = image
+        self.opWrapper.emplaceAndPop(self.op.VectorDatum([datum]))
+        return datum.poseKeypoints
+
+    def convert(self, points):
+        """ Преобразование скелетной модели openpose к универсальной модели """
+        new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+        new_points[3] = get_middle_point([points[0], points[15], points[16], points[17], points[18]])
+        new_points[4] = points[2]
+        new_points[5] = points[3]
+        new_points[6] = points[4]
+        new_points[10] = points[9]
+        new_points[11] = points[10]
+        new_points[12] = points[11]
+        new_points[7] = points[5]
+        new_points[8] = points[6]
+        new_points[9] = points[7]
+        new_points[13] = points[12]
+        new_points[14] = points[13]
+        new_points[15] = points[14]
+        new_points[0] = points[8]
+        new_points[16] = points[1]
+        new_points[1] = get_middle_point([points[1], points[8]])
+        new_points[2] = get_middle_point([points[0], points[1]])
+        return new_points
 
 
 def convert_kinect_v1(points):
     new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
     new_points[0] = points[0]
     new_points[1] = points[1]
-    new_points[2] = get_middle_point(points[2], points[3])
+    new_points[2] = get_middle_point([points[2], points[3]])
     new_points[3] = points[3]
     new_points[4] = points[4]
     new_points[5] = points[5]
@@ -265,79 +310,15 @@ def convert_kinect_v1(points):
     return new_points
 
 
-def convert_alphapose(points):
-    """ Преобразование скелетной модели alphapose к универсальной модели """
-    new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
-    new_points[3][0] = (points[0][0] + points[1][0] + points[2][0] + points[3][0] + points[4][0]) / 5
-    new_points[3][1] = (points[0][1] + points[1][1] + points[2][1] + points[3][1] + points[4][1]) / 5
-    new_points[3][2] = (points[0][2] + points[1][2] + points[2][2] + points[3][2] + points[4][2]) / 5
-
-    # new_points[16] = points[18]
-    new_points[4] = points[6]
-    # new_points[4][0] = points[6][0] * SHOULDER_COEFFICIENT_X
-    # new_points[4][1] = points[6][1] * SHOULDER_COEFFICIENT_Y
-    new_points[5] = points[8]
-    new_points[6] = points[10]
-    new_points[10] = points[12]
-    new_points[10][0] = points[12][0] * HIP_COEFFICIENT
-    new_points[11] = points[14]
-    new_points[12] = points[16]
-    new_points[7] = points[5]
-    # new_points[7][0] = points[5][0] / SHOULDER_COEFFICIENT_X
-    # new_points[7][1] = points[5][1] * SHOULDER_COEFFICIENT_Y
-    new_points[8] = points[7]
-    new_points[9] = points[9]
-    new_points[13] = points[11]
-    new_points[13][0] = points[11][0] / HIP_COEFFICIENT
-    new_points[14] = points[13]
-    new_points[15] = points[15]
-
-    new_points[0] = points[19]
-    new_points[1] = get_middle_point(points[18], points[19])
-    # new_points[2] = get_middle_point(new_points[3], points[18])
-    new_points[2] = points[18]
-
-    tmp = get_middle_point(points[5], points[6])
-    new_points[16] = get_middle_point(tmp, points[18])
-    return new_points
-
-
-def convert_openpose(points):
-    """ Преобразование скелетной модели openpose к универсальной модели """
-    new_points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
-    new_points[3][0] = (points[0][0] + points[15][0] + points[16][0] + points[17][0] + points[18][0]) / 5
-    new_points[3][1] = (points[0][1] + points[15][1] + points[16][1] + points[17][1] + points[18][1]) / 5
-    new_points[3][2] = (points[0][2] + points[15][2] + points[16][2] + points[17][2] + points[18][2]) / 5
-    new_points[4] = points[2]
-    new_points[5] = points[3]
-    new_points[6] = points[4]
-    new_points[10] = points[9]
-    new_points[11] = points[10]
-    new_points[12] = points[11]
-    new_points[7] = points[5]
-    new_points[8] = points[6]
-    new_points[9] = points[7]
-    new_points[13] = points[12]
-    new_points[14] = points[13]
-    new_points[15] = points[14]
-    new_points[0] = points[8]
-    new_points[16] = points[1]
-    new_points[1] = get_middle_point(points[1], points[8])
-    new_points[2] = get_middle_point(points[0], points[1])
-
-    return new_points
-
-
-def get_kinect_origin_points_1(kinect_origin_file):
-    kinect_origin_file.readline()
-    points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
-    for j in range(UNIVERSAL_POINTS_NUMBER):
-        tmp = kinect_origin_file.readline().split(' ')
-        points[j][0] = round(float(tmp[4]))
-        points[j][1] = round(float(tmp[5]))
-        points[j][2] = round(float(tmp[3])) * CONFIDENCE * 1.1
-    return points
-
+# def get_kinect_origin_points_1(kinect_origin_file):
+#     kinect_origin_file.readline()
+#     points = np.ndarray([UNIVERSAL_POINTS_NUMBER, 3])
+#     for j in range(UNIVERSAL_POINTS_NUMBER):
+#         tmp = kinect_origin_file.readline().split(' ')
+#         points[j][0] = round(float(tmp[4]))
+#         points[j][1] = round(float(tmp[5]))
+#         points[j][2] = round(float(tmp[3])) * LIB.confidence * 1.1
+#     return points
 
 def get_kinect_origin_points_2(kinect_origin_file):
     skeleton_kinect = []
@@ -360,190 +341,187 @@ def get_kinect_origin_points_2(kinect_origin_file):
     return skeleton_kinect
 
 
-def write_points_to_db(connect, file_id, points, kinect_points, frame_number):
-    cursor = connect.cursor()
-    for j in range(UNIVERSAL_POINTS_NUMBER):
-        cursor.execute(f'insert into point_difference (file_id, point_type, frame_number'
-                       f', x_kinect, y_kinect, confidence_kinect'
-                       f', x_converted, y_converted, confidence_converted)'
-                       f'select {file_id}, {j}, {frame_number}'
-                       f', {kinect_points[j][0]}, {kinect_points[j][1]}, {kinect_points[j][2]}'
-                       f', {points[j][0]}, {points[j][1]}, {points[j][2]}')
-    connect.commit()
-
-
-def get_average_skeleton_confidence(points):
+def get_middle_point(points):
+    cnt = 0
+    x = 0
+    y = 0
     conf = 0
+
     for point in points:
-        conf += point[2]
-    return conf / len(points)
+        if point[0] != 0 and point[1] != 0:
+            cnt += 1
+            x += point[0]
+            y += point[1]
+            conf += point[2]
+
+    x = x / cnt
+    y = y / cnt
+    conf = conf / cnt
+    middle = np.array([x, y, conf])
+    return middle
 
 
-def analyse_frame(frame, frame_number, out, origin_points, db_connection, file_id, start_time, start_frame=0):
-    skeletons = np.ndarray([0])
-    if LIBRARY == Libraries.move_net:
-        skeletons = get_movenet_skeletal_data(frame)
-    elif LIBRARY == Libraries.pose_net:
-        skeletons = get_posenet_skeleton_data(frame)
-    elif LIBRARY == Libraries.alpha_pose:
-        skeletons = get_alphapose_skeletal_data(frame)
-    elif LIBRARY == Libraries.open_pose:
-        skeletons = get_openpose_skeletal_data(frame)
+class Main:
+    kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6], [7, 16], [7, 8],
+                          [8, 9], [0, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15]]
 
-    frame = frame.astype(np.uint8)
+    def __init__(self, library, source, start_frame=0, end_frame=-1
+                 , write_video=False
+                 , kinect_origin_points=None
+                 , write_points_to_file=False, file_name='FileSkeleton.txt'
+                 , write_points_to_db=False, db_file='test'
+                 , convert_to_universal=True
+                 , show_frame=False, show_kinect_origin_skeleton=False
+                 , skeleton_thickness=1, skeleton_points_radios=3):
+        self.LIB = library
+        self.capture = cv2.VideoCapture(source)
+        self.current_frame = 0
 
-    for j in range(len(skeletons)):
-        current_points = skeletons[j]
-        if WRITE_POINTS_TO_FILE:
-            with open(POINTS_FILENAME, 'a') as f:
-                f.write(f"Frame: {frame_number}\n")
+        if start_frame > 0:
+            self.capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            self.current_frame = start_frame
 
-        if get_average_skeleton_confidence(current_points) > CONFIDENCE:
-            if CONVERT_TO_UNIVERSAL_SKELETON:
-                if LIBRARY == Libraries.move_net:
-                    current_points = convert_posenet(current_points)
-                elif LIBRARY == Libraries.pose_net:
-                    current_points = convert_posenet(current_points)
-                elif LIBRARY == Libraries.alpha_pose:
-                    current_points = convert_alphapose(current_points)
-                elif LIBRARY == Libraries.open_pose:
-                    current_points = convert_openpose(current_points)
-                draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
+        self.end_frame = end_frame
+
+        self.write_video = write_video
+        if write_video:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.outfile = cv2.VideoWriter(
+                f'{(source.isdigit() if f"camera {source}" else Path(source).stem)}'
+                f'_{type(self.LIB).__name__}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
+                , fourcc, self.capture.get(cv2.CAP_PROP_FPS)
+                , (round(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+                   , round(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))))
+
+        self.WRITE_POINTS_TO_FILE = write_points_to_file
+        if write_points_to_file:
+            self.points_file = open(file_name, 'w')
+
+        self.WRITE_POINTS_TO_DB = write_points_to_db
+        if write_points_to_db:
+            self.db_connection = sqlite3.connect(db_file)
+            curs = self.db_connection.cursor()
+            curs.execute(f'insert into files (file_name, library_id, confidence, experiment_date)'
+                         f'select \'{(source.isdigit() if f"camera {source}" else Path(source).stem)}\', {self.LIB.ID}, {self.LIB.confidence}, now();')
+            self.file_id = curs.lastrowid
+            self.db_connection.commit()
+
+        self.CONVERT_TO_UNIVERSAL_SKELETON = convert_to_universal
+        self.DRAW_KINECT_ORIGIN_SKELETON = show_kinect_origin_skeleton
+        self.kinect_origin_points = kinect_origin_points
+        self.SHOW_FRAME = show_frame
+        self.SKELETON_THICKNESS = skeleton_thickness
+        self.SKELETON_POINTS_RADIOS = skeleton_points_radios
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.capture.release()
+        if self.write_video:
+            self.outfile.release()
+        if self.WRITE_POINTS_TO_FILE:
+            self.points_file.close()
+        if self.WRITE_POINTS_TO_DB:
+            self.db_connection.close()
+        cv2.destroyAllWindows()
+
+    def draw_skeleton(self, im, points, connections, skeleton_color):
+        for point in points:
+            if self.WRITE_POINTS_TO_FILE:
+                self.points_file.write(f"{point[0]} {point[1]} {point[2]}\n")
+            if point[2] > self.LIB.confidence:
+                im = cv2.circle(im,
+                                (point[0].astype(np.int64),
+                                 point[1].astype(np.int64)),
+                                radius=self.SKELETON_POINTS_RADIOS, color=skeleton_color, thickness=-1)
+        for connect in connections:
+            if points[connect[0]][2] > self.LIB.confidence and points[connect[1]][2] > self.LIB.confidence:
+                cv2.line(im,
+                         (points[connect[0]][0].astype(np.int64), points[connect[0]][1].astype(np.int64)),
+                         (points[connect[1]][0].astype(np.int64), points[connect[1]][1].astype(np.int64)),
+                         color=skeleton_color, thickness=self.SKELETON_THICKNESS)
+
+    def write_points_to_db(self, points):
+        cursor = self.db_connection.cursor()
+        for j in range(UNIVERSAL_POINTS_NUMBER):
+            cursor.execute(f'insert into point_difference (file_id, point_type, frame_number'
+                           f', x_kinect, y_kinect, confidence_kinect'
+                           f', x_converted, y_converted, confidence_converted)'
+                           f'select {self.file_id}, {j}, {self.current_frame}'
+                           f', {self.kinect_origin_points is not None if self.kinect_origin_points[self.current_frame][j][0] else "null"}'
+                           f', {self.kinect_origin_points is not None if self.kinect_origin_points[self.current_frame][j][1] else "null"}'
+                           f', {self.kinect_origin_points is not None if self.kinect_origin_points[self.current_frame][j][2] else "null"}'
+                           f', {points[j][0]}, {points[j][1]}, {points[j][2]}')
+        self.db_connection.commit()
+
+    def get_average_skeleton_confidence(self, points):
+        conf = 0
+        for point in points:
+            conf += point[2]
+        return conf / len(points)
+
+    def analyse_frame(self, frame):
+        skeletons = self.LIB.get_skeleton_data(frame)
+        frame = frame.astype(np.uint8)
+
+        new_skeletons = np.ndarray([len(skeletons), UNIVERSAL_POINTS_NUMBER, 3])
+        for j in range(len(skeletons)):
+            if self.WRITE_POINTS_TO_FILE:
+                self.points_file.write(f"Frame: {self.current_frame}\n")
+
+            if self.get_average_skeleton_confidence(skeletons[j]) > self.LIB.confidence:
+                if self.CONVERT_TO_UNIVERSAL_SKELETON:
+                    new_skeletons[j] = self.LIB.convert(skeletons[j])
+                    self.draw_skeleton(frame, new_skeletons[j], self.kinect_connections, (0, 0, 255))
+                else:
+                    self.draw_skeleton(frame, skeletons[j], self.LIB.CONNECTIONS, (0, 255, 0))
+
+            if self.DRAW_KINECT_ORIGIN_SKELETON:
+                self.draw_skeleton(frame, self.kinect_origin_points[self.current_frame], self.kinect_connections,
+                                   (0, 255, 0))
+
+            if self.WRITE_POINTS_TO_DB and self.CONVERT_TO_UNIVERSAL_SKELETON:
+                self.write_points_to_db(new_skeletons[j])
+
+        cv2.putText(frame, f'frame: {self.current_frame}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        if self.SHOW_FRAME:
+            cv2.imshow('frame', frame)
+
+        if self.write_video:
+            self.outfile.write(frame)
+
+        return new_skeletons
+
+    def get_next_frame(self):
+        if (self.capture.isOpened() and
+                (self.capture.get(cv2.CAP_PROP_POS_FRAMES) <= self.end_frame or self.end_frame == -1)):
+            ret, frame = self.capture.read()
+            if ret:
+                points = self.analyse_frame(frame)
+                self.current_frame += 1
+                return points
             else:
-                draw_skeleton(frame, current_points, posenet_connections, (0, 255, 0))
-                # current_points = convert_posenet(current_points)
-                # draw_skeleton(frame, current_points, kinect_connections, (0, 0, 255))
-
-        if DRAW_KINECT_ORIGIN_SKELETON:
-            draw_skeleton(frame, origin_points, kinect_connections, (0, 255, 0))
-
-            if WRITE_POINTS_TO_DB:
-                write_points_to_db(db_connection, file_id, current_points, origin_points, frame_number)
-
-    cv2.putText(frame, f'frame: {frame_number}', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    cv2.putText(frame, f'frame rate: {(frame_number - start_frame) / (datetime.datetime.now() - start_time).total_seconds()}', (10, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-    if SHOW_FRAME:
-        cv2.imshow('frame', frame)
-    out.write(frame)
-
-
-def analyse_images(db_connection, images_path, origin_points, out_filename, start_time):
-    image_width = round(cv2.imread(os.path.join(images_path, os.listdir(images_path)[0])).shape[1])
-    image_height = round(cv2.imread(os.path.join(images_path, os.listdir(images_path)[0])).shape[0])
-
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(f'{out_filename}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
-                          , fourcc, 24
-                          , (image_width, image_height))
-    file_id = -1
-    if WRITE_POINTS_TO_DB:
-        curs = db_connection.cursor()
-        curs.execute(f'insert into files (file_name, library_id, confidence, experiment_date, width, height)'
-                     f'select \'{out_filename}\', {LIBRARY.value}'
-                     f', {CONFIDENCE}, datetime(\'now\',\'localtime\')'
-                     f', {image_width}, {image_height};')
-        file_id = curs.lastrowid
-        db_connection.commit()
-
-    i = 0
-    for img in os.listdir(images_path):
-        if os.path.isfile(os.path.join(images_path, img)):
-            frame = cv2.imread(os.path.join(images_path, img))
-            if frame is None:
-                print(f'can not read {os.path.join(images_path, img)}')
-                continue
-            analyse_frame(frame, i, out, origin_points[i], db_connection, file_id, start_time)
-            i += 1
-    out.release()
-
-
-def analyse_video(db_connection, filename, current_kinect_points, start_time, begin_frame=0, end_frame=-1):
-    file_id = -1
-    if WRITE_POINTS_TO_DB:
-        curs = db_connection.cursor()
-        curs.execute(f'insert into files (file_name, library_id, confidence, experiment_date)'
-                     f'select \'{filename}\', {LIBRARY}, {CONFIDENCE}, now();')
-        file_id = curs.lastrowid
-        db_connection.commit()
-    cap = cv2.VideoCapture(filename)
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(f'{Path(filename).stem}_{LIBRARY.name}_{datetime.datetime.now().strftime("%d_%m_%Y_%H_%M")}.mp4'
-                          , fourcc, cap.get(cv2.CAP_PROP_FPS)
-                          , (round(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))))
-    i = begin_frame
-    cap.set(cv2.CAP_PROP_POS_FRAMES, begin_frame)
-    while cap.isOpened() and (cap.get(cv2.CAP_PROP_POS_FRAMES) <= end_frame or end_frame == -1):
-        ret, frame = cap.read()
-        if ret:
-            analyse_frame(frame, i, out, current_kinect_points[i], db_connection, file_id, start_time, start_frame=begin_frame)
-            i += 1
-        else:
-            break
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    out.release()
-
-
-def analyse_SYSU3DAction_video(db_connection, path, actor, video):
-    tmp_points = scipy.io.loadmat(
-        os.path.join(path, actor, video, 'sklImage.mat'))[
-        'S']
-    points = np.ndarray([len(tmp_points[0][0]), len(tmp_points), 3])
-    for i in range(len(points)):
-        for j in range(len(points[0])):
-            points[i][j][0] = tmp_points[j][0][i]
-            points[i][j][1] = tmp_points[j][1][i]
-            points[i][j][2] = 1.1 * CONFIDENCE
-
-    origin_points = np.ndarray([len(points), UNIVERSAL_POINTS_NUMBER, 3])
-    for i in range(len(points)):
-        origin_points[i] = convert_kinect_v1(points[i])
-    analyse_images(db_connection, os.path.join(path, actor, video, 'rgb'), origin_points, f'{actor}_{video}')
-
-
-def analyse_SYSU3DAction(db_connection, path, analyse_all=True, activity_number=0):
-    for actor in os.listdir(path):
-        if analyse_all:
-            for video in os.listdir(os.path.join(path, actor)):
-                analyse_SYSU3DAction_video(db_connection, path, actor, video)
-        else:
-            video = f'video{activity_number}'
-            analyse_SYSU3DAction_video(db_connection, path, actor, video)
+                return None
 
 
 def main():
-    if WRITE_POINTS_TO_FILE:
-        open(POINTS_FILENAME, 'w').close()
-    kinect_origin_file = open('FileSkeleton.txt', 'r')
+    filename = '0002-M.avi'
+    # kinect_origin_file = open('FileSkeleton.txt', 'r')
+    kinect_origin_file = open('0002-M.txt', 'r')
+    filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
 
-    db_connection = None
-    if WRITE_POINTS_TO_DB:
-        db_connection = sqlite3.connect(DATABASE_FILE)
+    kinect_points = get_kinect_origin_points_2(kinect_origin_file)
+    lib = AlphaPose()
+    with Main(lib, '0002-M.avi', start_frame=3000, end_frame=3100, show_frame=True) as main3:
+        while True:
+            ret = main3.get_next_frame()
+            if ret is None:
+                break
+            print(ret)
 
-    if WORK_TYPE == WorkTypes.single_video:
-        # kinect_origin_file = open('FileSkeleton.txt', 'r')
-        kinect_origin_file = open('0002-M.txt', 'r')
-        # kinect_points = np.ndarray(0)
-        # if DRAW_KINECT_ORIGIN_SKELETON:
-        #     kinect_points = get_kinect_origin_points_1(kinect_origin_file)
-        filename = 'person_stream.mp4'  # файл, по которому строим скелетные модели
-
-        kinect_points = get_kinect_origin_points_2(kinect_origin_file)
-
-        filename = '0002-M.avi'  # файл, по которому строим скелетные модели
-        # analyse_video(db_connection, filename, kinect_points, datetime.datetime.now())
-        analyse_video(db_connection, filename, kinect_points, datetime.datetime.now(), begin_frame=3000, end_frame=4000)
-    elif WORK_TYPE == WorkTypes.SYSU3DAction:
-        analyse_SYSU3DAction(db_connection, 'C:\\Users\\akova\\Documents\\SYSU3DAction\\3DvideoNorm', analyse_all=True)
-
-    if WRITE_POINTS_TO_DB:
-        db_connection.close()
-
-    cv2.destroyAllWindows()
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
 
 if __name__ == "__main__":
