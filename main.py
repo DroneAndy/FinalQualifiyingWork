@@ -13,6 +13,7 @@ import numpy as np
 import alphapose_api
 from alphapose.utils.config import update_config
 
+# Сделать в виде библиотеки, чтобы можно было скачать сразу с гита
 
 UNIVERSAL_POINTS_NUMBER = 17
 
@@ -108,7 +109,7 @@ class Posenet(Library):
     CONNECTIONS = [[0, 1], [1, 3], [0, 2], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
                    [6, 12], [12, 14], [14, 16], [5, 11], [11, 13], [13, 15], [11, 12]]
 
-    def __init__(self, confidence=0.05, model_id=101, model_dir='/posenet/_models',
+    def __init__(self, confidence=0.05, model_id=101, model_dir='/models/posenet',
                  max_pose_detections=10, min_pose_score=0.25):
         super().__init__(confidence=confidence)
         self.sess = tf.compat.v1.Session()
@@ -189,8 +190,8 @@ class AlphaPose(Library):
         , [15, 24], [24, 22], [20, 22], [20, 24]
                    ]
 
-    def __init__(self, confidence=0.5, config_path='configs/halpe_26/resnet/256x192_res50_lr1e-3_1x.yaml',
-                 params=Namespace(checkpoint='./pretrained_models/halpe26_fast_res50_256x192.pth',
+    def __init__(self, confidence=0.5, config_path='alphapose/configs/halpe_26/resnet/256x192_res50_lr1e-3_1x.yaml',
+                 params=Namespace(checkpoint='./models/alphapose/halpe26_fast_res50_256x192.pth',
                                   debug=False, detector='yolo', device=torch.device(type='cpu'), eval=False, flip=False,
                                   format=None, gpus=[-1], min_box_area=0, pose_flow=False, pose_track=False,
                                   profile=False, showbox=False, tracking=False, vis=False, vis_fast=False)
@@ -240,13 +241,13 @@ class AlphaPose(Library):
 class OpenPose(Library):
     ID = 3
 
-    def __init__(self, confidence=0.3, params=dict([("model_folder","models/")])):
+    def __init__(self, confidence=0.3, params=dict([("model_folder","models/openpose")])):
         super().__init__(confidence=confidence)
         dir_path = os.path.dirname(os.path.realpath(__file__))
         try:
             # Change these variables to point to the correct folder (Release/x64 etc.)
-            sys.path.append(dir_path + '/bin/python/openpose/Release')
-            os.environ['PATH'] = os.environ['PATH'] + ';' + dir_path + '/x64/Release;' + dir_path + '/bin;'
+            sys.path.append(dir_path + '/openpose/bin/python/openpose/Release')
+            os.environ['PATH'] = os.environ['PATH'] + ';' + dir_path + '/x64/Release;' + dir_path + '/openpose/bin;'
             import pyopenpose as op
             self.op = op
         except ImportError as e:
@@ -491,18 +492,18 @@ class Main:
         if self.write_video:
             self.outfile.write(frame)
 
-        return new_skeletons
+        return frame, new_skeletons
 
     def get_next_frame(self):
         if (self.capture.isOpened() and
                 (self.capture.get(cv2.CAP_PROP_POS_FRAMES) <= self.end_frame or self.end_frame == -1)):
             ret, frame = self.capture.read()
             if ret:
-                points = self.analyse_frame(frame)
+                frame, points = self.analyse_frame(frame)
                 self.current_frame += 1
-                return points
+                return frame, points
             else:
-                return None
+                return None, None
 
 
 def main():
@@ -514,11 +515,12 @@ def main():
     kinect_points = get_kinect_origin_points_2(kinect_origin_file)
     lib = AlphaPose()
     with Main(lib, '0002-M.avi', start_frame=3000, end_frame=3100, show_frame=True) as main3:
+    # with Main(lib, 0, show_frame=True) as main3:
         while True:
-            ret = main3.get_next_frame()
-            if ret is None:
+            frame, points = main3.get_next_frame()
+            if points is None:
                 break
-            print(ret)
+            # print(points)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break

@@ -1,0 +1,2 @@
+openpose/bin/*.dll filter=lfs diff=lfs merge=lfs -text
+detector/yolo/data/*.weights filter=lfs diff=lfs merge=lfs -text
