@@ -1,1 +1,3 @@
 /models/
+/openpose/bin/*.dll
+/detector/yolo/data/*.weights
