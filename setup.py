@@ -14,7 +14,7 @@ if __name__ == '__main__':
     setup(
         name='skeleton-converter',
         version=os.getenv('PACKAGE_VERSION', '0.0.dev0'),
-        package_dir={'': 'src'},
+        package_dir={'': 'skeleton_converter'},
         packages=find_packages('skeleton_converter', include=[
             'skeleton_converter*'
         ]),
