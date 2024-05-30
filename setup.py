@@ -14,10 +14,7 @@ if __name__ == '__main__':
     setup(
         name='skeleton-converter',
         version=os.getenv('PACKAGE_VERSION', '0.0.dev0'),
-        package_dir={'': ''},
-        packages=find_packages('', include=[
-            'skeleton_converter*'
-        ]),
+        packages=['skeleton_converter'],
         description='Python library for conversion skeleton models to universal model.',
         author='Kovalev Andrey',
         install_requires=[
