@@ -13,7 +13,6 @@ import numpy as np
 from alphapose import alphapose_api
 from alphapose.utils.config import update_config
 
-# Сделать в виде библиотеки, чтобы можно было скачать сразу с гита
 
 UNIVERSAL_POINTS_NUMBER = 17
 
@@ -182,7 +181,7 @@ class AlphaPose(Library):
     POINTS_NUMBER = 26
     HIP_COEFFICIENT = 1.01
     CONNECTIONS = [[0, 1], [1, 3], [0, 2], [2, 4]
-        , [0, 17], [0, 18], [18, 19]
+        , [0, 17], [0, 18], [18, 19], [6, 18], [5, 18]
         , [5, 7], [7, 9], [6, 8], [8, 10]
         , [19, 11], [19, 12]
         , [12, 14], [14, 16], [11, 13], [13, 15]
@@ -202,6 +201,9 @@ class AlphaPose(Library):
     def get_skeleton_data(self, image):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         pose = self.demo.process('', image)
+        if pose is None:
+            print("ERROR")
+            return np.ndarray([0, self.POINTS_NUMBER, 3])
         results = pose.get("result")
         keypoint_with_scores = np.ndarray([len(results), self.POINTS_NUMBER, 3])
         for i in range(len(results)):
@@ -240,6 +242,11 @@ class AlphaPose(Library):
 
 class OpenPose(Library):
     ID = 3
+
+    CONNECTIONS = [[0, 15], [15, 17], [0, 16], [16, 18], [0, 1], [1, 2], [2, 3], [3, 4]
+                   , [1, 5], [5, 6], [6, 7], [1, 8], [8, 9], [9, 10], [10, 11], [11, 22], [11, 24], [22, 23]
+                   , [8, 12], [12, 13], [13, 14], [14, 21], [14, 19], [19, 20]
+                   ]
 
     def __init__(self, confidence=0.3, params=dict([("model_folder","models/openpose")])):
         super().__init__(confidence=confidence)
@@ -362,6 +369,13 @@ def get_middle_point(points):
     return middle
 
 
+def get_average_skeleton_confidence(points):
+    conf = 0
+    for point in points:
+        conf += point[2]
+    return conf / len(points)
+
+
 class converter:
     kinect_connections = [[0, 1], [1, 16], [2, 16], [2, 3], [4, 16], [4, 5], [5, 6], [7, 16], [7, 8],
                           [8, 9], [0, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15]]
@@ -369,7 +383,7 @@ class converter:
     def __init__(self, library, source, start_frame=0, end_frame=-1
                  , write_video=False
                  , kinect_origin_points=None
-                 , write_points_to_file=False, file_name='FileSkeleton.txt'
+                 , write_points_to_file=False, filename='FileSkeleton.txt'
                  , write_points_to_db=False, db_file='test'
                  , convert_to_universal=True
                  , show_frame=False, show_kinect_origin_skeleton=False
@@ -396,7 +410,7 @@ class converter:
 
         self.WRITE_POINTS_TO_FILE = write_points_to_file
         if write_points_to_file:
-            self.points_file = open(file_name, 'w')
+            self.points_file = open(filename, 'w')
 
         self.WRITE_POINTS_TO_DB = write_points_to_db
         if write_points_to_db:
@@ -456,25 +470,23 @@ class converter:
                            f', {points[j][0]}, {points[j][1]}, {points[j][2]}')
         self.db_connection.commit()
 
-    def get_average_skeleton_confidence(self, points):
-        conf = 0
-        for point in points:
-            conf += point[2]
-        return conf / len(points)
-
     def analyse_frame(self, frame):
         skeletons = self.LIB.get_skeleton_data(frame)
         frame = frame.astype(np.uint8)
 
+        if len(skeletons) == 0:
+            return frame, skeletons
+
         new_skeletons = np.ndarray([len(skeletons), UNIVERSAL_POINTS_NUMBER, 3])
-        for j in range(len(skeletons)):
-            if self.WRITE_POINTS_TO_FILE:
+        for j in range(1):
+        # for j in range(len(skeletons)):
+            if self.WRITE_POINTS_TO_FILE and get_average_skeleton_confidence(skeletons[j]) > self.LIB.confidence:
                 self.points_file.write(f"Frame: {self.current_frame}\n")
 
-            if self.get_average_skeleton_confidence(skeletons[j]) > self.LIB.confidence:
+            if get_average_skeleton_confidence(skeletons[j]) > self.LIB.confidence:
                 if self.CONVERT_TO_UNIVERSAL_SKELETON:
                     new_skeletons[j] = self.LIB.convert(skeletons[j])
-                    self.draw_skeleton(frame, new_skeletons[j], self.kinect_connections, (0, 0, 255))
+                    self.draw_skeleton(frame, new_skeletons[j], self.kinect_connections, (0, 255, 0))
                 else:
                     self.draw_skeleton(frame, skeletons[j], self.LIB.CONNECTIONS, (0, 255, 0))
 
