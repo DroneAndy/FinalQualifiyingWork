@@ -1,1 +1,2 @@
 include skeleton_converter/openpose/*
+include posenet/*
