@@ -11,15 +11,19 @@ def read_pipenv_dependencies(fname):
         return [dependency for dependency in lockjson.get('default')]
 
 if __name__ == '__main__':
+    main = find_packages('skeleton_converter', include=['skeleton_converter', 'skeleton_converter.*'])
+    posenet = find_packages('posenet', include=['posenet', 'posenet.*'])
+    alphapose = find_packages('alphapose', include=['alphapose', 'alphapose.*'])
+    main.extend(posenet)
+    main.extend(alphapose)
     setup(
         name='skeleton-converter',
         version=os.getenv('PACKAGE_VERSION', '0.0.dev0'),
-        packages=[
-            find_packages('skeleton_converter', include=['skeleton_converter', 'skeleton_converter.*']),
-            find_packages('posenet', include=['posenet', 'posenet.*']),
-            find_packages('alphapose', include=['alphapose', 'alphapose.*']),
-        ],
-        # packages=['skeleton_converter', 'posenet', 'alphapose'],
+        packages=main,
+        # packages=['skeleton_converter', 'posenet*', 'alphapose*'],
+        # packages=find_packages(),
+        package_data={'': ['skeleton_converter/openpose/*']},
+        include_package_data=True,
         description='Python library for conversion skeleton models to universal model.',
         author='Kovalev Andrey',
         install_requires=[
