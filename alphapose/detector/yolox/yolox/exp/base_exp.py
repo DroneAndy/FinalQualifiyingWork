@@ -12,7 +12,7 @@ from typing import Dict
 import torch
 from torch.nn import Module
 
-# from detector.yolox.yolox.utils import LRScheduler
+# from alphapose.detector.yolox.yolox.utils import LRScheduler
 
 
 class BaseExp(metaclass=ABCMeta):

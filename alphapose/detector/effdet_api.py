@@ -16,7 +16,7 @@ import numpy as np
 from efficientdet.utils import unique, prep_image, prep_frame, bbox_iou
 from efficientdet.effdet import EfficientDet, get_efficientdet_config, DetBenchEval, load_checkpoint
 
-from detector.apis import BaseDetector
+from alphapose.detector.apis import BaseDetector
 
 try:
     from apex import amp
@@ -28,7 +28,7 @@ except ImportError:
 #If you force to compile extension on Windows and ensure appropriate visual studio
 #is intalled, you can try to use these ext_modules.
 if platform.system() != 'Windows':
-    from detector.nms import nms_wrapper
+    from alphapose.detector.nms import nms_wrapper
 
 
 class EffDetDetector(BaseDetector):

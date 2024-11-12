@@ -6,7 +6,7 @@ import os
 
 import torch.nn as nn
 
-from detector.yolox.yolox.exp import Exp as MyExp
+from alphapose.detector.yolox.yolox.exp import Exp as MyExp
 
 
 class Exp(MyExp):
@@ -24,7 +24,7 @@ class Exp(MyExp):
                     m.momentum = 0.03
 
         if "model" not in self.__dict__:
-            from detector.yolox.yolox.models import YOLOX, YOLOFPN, YOLOXHead
+            from alphapose.detector.yolox.yolox.models import YOLOX, YOLOFPN, YOLOXHead
 
             backbone = YOLOFPN()
             head = YOLOXHead(

@@ -484,15 +484,15 @@ class converter:
                 self.points_file.write(f"Frame: {self.current_frame}\n")
 
             if get_average_skeleton_confidence(skeletons[j]) > self.LIB.confidence:
+                if self.DRAW_KINECT_ORIGIN_SKELETON:
+                    self.draw_skeleton(frame, self.kinect_origin_points[self.current_frame], self.kinect_connections,
+                                       (0, 0, 255))
+
                 if self.CONVERT_TO_UNIVERSAL_SKELETON:
                     new_skeletons[j] = self.LIB.convert(skeletons[j])
                     self.draw_skeleton(frame, new_skeletons[j], self.kinect_connections, (0, 255, 0))
                 else:
                     self.draw_skeleton(frame, skeletons[j], self.LIB.CONNECTIONS, (0, 255, 0))
-
-            if self.DRAW_KINECT_ORIGIN_SKELETON:
-                self.draw_skeleton(frame, self.kinect_origin_points[self.current_frame], self.kinect_connections,
-                                   (0, 255, 0))
 
             if self.WRITE_POINTS_TO_DB and self.CONVERT_TO_UNIVERSAL_SKELETON:
                 self.write_points_to_db(new_skeletons[j])

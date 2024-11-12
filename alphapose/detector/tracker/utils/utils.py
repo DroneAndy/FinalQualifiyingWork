@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 import platform
 if platform.system() != 'Windows':
-    from detector.nms import nms_wrapper
+    from alphapose.detector.nms import nms_wrapper
 
 # Set printoptions
 torch.set_printoptions(linewidth=1320, precision=5, profile='long')
